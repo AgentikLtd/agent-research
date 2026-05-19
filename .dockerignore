@@ -6,4 +6,7 @@ coverage
 .github
 .env
 .env.*
+!.env.example
 *.log
+*.tsbuildinfo
+.turbo

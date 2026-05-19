@@ -14,6 +14,7 @@ ENV PORT=4003
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/manifest.yaml ./manifest.yaml
 EXPOSE 4003
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -qO- http://localhost:4003/health || exit 1
