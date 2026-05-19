@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+  audit-gates:
+    # WS33 — formalised audit closures as block-merge CI gates.
+    # Runs the three workspace-vendored validator scripts:
+    #   - audit-prod.mjs           (gate 6 — pnpm audit --prod clean + allow-list)
+    #   - validate-env-drift.mjs   (gate 7 — .env.example ↔ getter parity)
+    #   - validate-ci-templates.mjs (gate 8 — CI template byte-parity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Gate 6 — pnpm audit clean
+        run: node scripts/audit-prod.mjs
+
+      - name: Gate 7 — env-drift
+        run: node scripts/validate-env-drift.mjs
+
+      - name: Gate 8 — CI template parity
+        run: node scripts/validate-ci-templates.mjs
+
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Audit
+        run: |
+          if command -v pnpm >/dev/null; then
+            pnpm audit --audit-level=high || true
+          fi
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
