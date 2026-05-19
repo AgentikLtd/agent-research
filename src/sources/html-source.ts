@@ -34,7 +34,10 @@ export interface HtmlItem {
 }
 
 const DEFAULT_UA = 'agentik-research/0.1';
-const DEFAULT_MAX_BYTES = 256 * 1024;
+// 2 MB — real vendor newsrooms (genesys.com/en-gb/company/newsroom is 1 MB)
+// commonly exceed 256 KB. Lower limit silently dropped article cards that
+// lived past byte 262144 in the static markup. Re-tune if pages exceed this.
+const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_ITEMS = 25;
 
 /**
