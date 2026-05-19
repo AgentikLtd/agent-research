@@ -1,0 +1,139 @@
+schema_version: a2a/1.2
+
+agent:
+  name: genesys-research
+  version: 0.1.0
+  description: |
+    Twice-weekly intelligence brief on Genesys Cloud CX — feature releases,
+    market shifts, practitioner signal, vendor strategy. Output: one markdown
+    brief delivered via A2A to email-manager + persisted to workspace storage.
+    Audience: a Principal Genesys engineer running a UK motor-insurance
+    contact-centre estate.
+  vendor: AgentikLtd
+  homepage: https://github.com/AgentikLtd/agent-research
+  endpoints:
+    jsonrpc: http://localhost:4003/jsonrpc
+    health: http://localhost:4003/health
+  capabilities: [skills.invoke, schedule.fire]
+  skills: [run-brief, gather-sources, compose-brief, dispatch-brief]
+  authentication: { type: bearer }
+
+x-agentik/runtime:
+  container_image: ghcr.io/agentikltd/agent-research:0.1.0
+  resources: { cpu: shared-1x, memory_mb: 512 }
+  required_secrets: []                  # No per-agent OAuth or API keys. Reddit JSON is public; vendor pages public.
+  required_external_services:
+    - { name: hub_llm_gateway, url_env: HUB_BASE_URL }
+    - { name: email_manager_a2a, agent: email-manager }
+    - { name: hub_storage,      url_env: HUB_BASE_URL }
+  egress_allowlist:
+    - orchestrators.genesys.com         # Beyond Community
+    - help.genesys.cloud                # Administrator help / release notes
+    - www.reddit.com                    # r/callcentres
+    - www.genesys.com                   # Newsroom
+    - www.cxtoday.com                   # Industry coverage
+
+x-agentik/model:
+  default: anthropic/claude-sonnet-4-6
+  recommended_for_quality: anthropic/claude-opus-4-7
+  minimum_capable: anthropic/claude-haiku-4-5-20251001
+  per_skill_overrides:
+    compose-brief: anthropic/claude-opus-4-7  # The brief is the only LLM call; quality matters
+  provider_preference: [openrouter, anthropic]  # OpenRouter first, Anthropic fallback per ADR-0001
+
+x-agentik/budget:
+  hourly_max_gbp: 0.50
+  daily_max_gbp:  2.00
+  per_task:
+    input_tokens_max: 60000
+    output_tokens_max: 8000
+  max_turns: 20                         # Today compose-brief is a single LLM call (1 turn). 20 leaves
+                                        # headroom for future tool use inside compose-brief (citation
+                                        # verification, multi-step source filtering) without making the
+                                        # cap meaningless. Hourly/daily GBP caps are the binding safety
+                                        # net; max_turns is a runaway-loop guard.
+
+x-agentik/schedule:
+  - name: produce-brief-tue
+    cron: '0 6 * * 2'                  # Tue 06:00
+    timezone: Europe/London
+    policy: collapse                    # Don't catch up missed Tuesdays
+    target: { skill: run-brief, args: { since: '-72h' } }
+  - name: produce-brief-thu
+    cron: '0 6 * * 4'                  # Thu 06:00
+    timezone: Europe/London
+    policy: collapse
+    target: { skill: run-brief, args: { since: '-72h' } }
+
+x-agentik/storage:
+  namespace: genesys-research
+  workspace_paths:
+    write: [genesys/briefs/]
+    read:  [genesys/briefs/]
+
+x-agentik/memory:
+  episodic: { backend: postgres, schema_suffix: episodic }
+  semantic: { enabled: false }          # Defer — pgvector subsystem not yet RAG-wired
+  procedural: { enabled: false }        # Defer — QMD backend gap
+
+x-agentik/output_channels:
+  scheduled_brief:
+    - { adapter: 'a2a:email-manager', event: draft-email, payload: { subjectTemplate: 'Genesys Cloud CX Brief — {date}' } }
+  # Fallback: if A2A to email-manager fails, the run-brief skill still writes the markdown to
+  # storage. The operator script reports the storage path on error so the brief is recoverable.
+
+x-agentik/dependencies:
+  - { agent: email-manager, reason: 'outbound delivery via draft-email skill' }
+
+x-agentik/knowledge:
+  enabled: false                        # ADR-0007 RAG not built; sources live in profile.config instead
+
+x-agentik/defaults:
+  profile:
+    config:
+      persona:
+        voice: |
+          Direct, plain English, senior-engineer-to-senior-engineer. State the
+          finding, then the evidence, then the 'so what' in one line. British
+          English spelling.
+        avoid:
+          - 'Opening compliments or acknowledgements'
+          - "'Exciting', 'game-changing', 'revolutionary', 'cutting-edge', 'leverage', 'unlock', 'empower'"
+          - "'In today''s fast-moving landscape' and similar throat-clearing"
+          - 'Hedging language used to pad'
+          - 'Editorialising about how interesting or important something is'
+          - 'Emoji and exclamation marks outside of quoted material'
+          - "Restating the user''s request"
+        audience: |
+          One reader: a Principal Genesys Cloud engineer with 25+ years of
+          contact-centre experience. Assume technical fluency. Skip the 101s.
+      guardrails:
+        - { id: g1, rule: 'Every factual claim carries an inline [n] citation mapping to a numbered source at the end.' }
+        - { id: g2, rule: 'If a claim cannot be verified against at least one named, dated source, omit it. Speculation is not permitted.' }
+        - { id: g3, rule: 'Never invent release dates, feature names, version numbers, exec quotes, or roadmap items.' }
+        - { id: g4, rule: 'Label every reported item with one of: GA, BETA, ROADMAP, RUMOUR. Items without enough evidence to label belong in the noise log, not the brief.' }
+        - { id: g5, rule: 'Date-stamp every item. Anything older than 14 days from today is omitted or flagged CONTEXT, NOT NEWS.' }
+        - { id: g6, rule: 'Flag any source that reads as vendor marketing, partner sales copy, or potentially-sponsored analyst content.' }
+        - { id: g7, rule: 'When two sources conflict on a material fact, surface the conflict and cite both. Do not pick a side.' }
+        - { id: g8, rule: 'Reddit / Beyond Community / forum posts are signal, not fact. User reports require corroboration from vendor docs, release notes, or a second independent source before being stated as fact.' }
+      sources:
+        - { id: beyond-cx,        label: 'Genesys Beyond Community — Genesys Cloud CX', url: 'https://orchestrators.genesys.com/community?product=genesys-cloud-cx', type: community, focus: 'Practitioner discussion, real-world implementation issues, feature requests', credibility: medium }
+        - { id: beyond-home,      label: 'Genesys Beyond — Home',                      url: 'https://orchestrators.genesys.com/home',                                  type: community, focus: 'Community announcements, partner-led webinars',                       credibility: medium }
+        - { id: help-admin,       label: 'Genesys Cloud Administrator Help',           url: 'https://help.genesys.cloud/administrators/',                              type: docs,      focus: 'Authoritative source for GA features and release notes',              credibility: high }
+        - { id: reddit-callcentres, label: 'r/callcentres',                              url: 'https://www.reddit.com/r/callcentres/',                                   type: subreddit, focus: 'Operator-side perspective; sentiment on Genesys vs alternatives',     credibility: low }
+        - { id: vendor-newsroom,  label: 'Genesys Newsroom (UK)',                      url: 'https://www.genesys.com/en-gb/company/newsroom',                          type: vendor,    focus: 'Official vendor announcements',                                          credibility: medium }
+        - { id: cxtoday-genesys,  label: 'CX Today — Genesys vendor page',             url: 'https://www.cxtoday.com/vendor/genesys/',                                 type: news,      focus: 'Industry coverage of Genesys',                                           credibility: medium }
+      output:
+        destination_subject_prefix: 'Genesys Cloud CX Brief'
+        schedule_label: 'Tue/Thu 06:00 BST'
+        additional_recipients: []           # Per-agent additive list. Concatenated to the tenant-canonical
+                                            # operator_email (sourced from tenant_settings, not from this
+                                            # manifest). Empty by default; operator edits via UI post-install.
+        markdown_sections:
+          - headline
+          - feature_releases
+          - market_trends
+          - community_signal
+          - vendor_strategy
+          - noise_log
+          - sources
