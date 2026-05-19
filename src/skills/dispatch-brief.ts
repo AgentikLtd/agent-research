@@ -1,5 +1,6 @@
 /**
- * dispatch-brief skill — persist the brief and queue an email draft.
+ * dispatch-brief skill — persist the brief and dispatch it through the
+ * hub's channel-router.
  *
  * Orchestrates three Phase-4 clients:
  *   1. `ProfileClient` — fetches the agent's own profile (for the
@@ -7,40 +8,53 @@
  *      `operator_email`).
  *   2. `StorageClient` — writes the markdown body via the hub's
  *      `/api/storage/put` route. The put is best-effort: a failure
- *      surfaces as a warning but does NOT abort the dispatch — the email
- *      is the user-visible artefact and is allowed to ship without an
- *      archived copy if storage is degraded.
- *   3. `EmailManagerClient` — invokes the email-manager's `draft-email`
- *      skill via the hub-proxy /invoke-skill route.
+ *      surfaces as a warning but does NOT abort the dispatch — the
+ *      delivered brief is the user-visible artefact and is allowed to
+ *      ship without an archived copy if storage is degraded.
+ *   3. `ChannelDispatchClient` — POSTs to the hub's `/api/channel/dispatch`
+ *      with `event_id: 'scheduled_summary'`. The hub's channel-router
+ *      resolves the actual channel adapter (agentmail / web-inbox /
+ *      telegram …) by consulting the agent's manifest `output_channels`
+ *      block (landed into `agent_profiles.config` by the install saga).
+ *
+ *      Architecture note: this replaces the prior email-manager A2A
+ *      hop. AgentMail is a CHANNEL, not a specialist's responsibility;
+ *      email-manager owns Gmail draft/triage, not transactional sends.
  *
  * Recipient resolution (the strict step):
  *   tenant.operator_email ∪ profile.config.output.additional_recipients
  *   deduped, trimmed, empty strings filtered. If the resulting list is
  *   empty the skill throws `DispatchError('no_recipients')` — sending a
- *   brief to no one is always a bug, never silent.
+ *   brief to no one is always a bug, never silent. (We preserve this
+ *   preflight even though web-inbox would technically accept zero
+ *   recipients; an operator with no destination configured has not
+ *   actually opted in to receiving the brief.)
+ *
+ *   Recipients flow over the wire as `metadata.recipients` —
+ *   comma-joined because the channel-dispatch schema forbids array
+ *   values inside metadata (flat key→string|number|boolean|null). The
+ *   AgentMail / web-inbox adapter splits on the hub side.
  *
  * Storage namespace (template-extensibility — CLAUDE.md §14):
  *   Do NOT hardcode `genesys/`. The path is derived in this order:
  *     1. `profile.config.output.storage_namespace` (string)         — explicit override.
- *     2. `<agent_name>` from the profile (e.g. `genesys-research`)  — default; lets each
- *        flavour land its briefs under its own folder without a manifest edit.
+ *     2. `<agent_name>` from the profile (e.g. `genesys-research`)  — default.
  *   Final path: `<namespace>/briefs/<YYYY-MM-DD>.md`.
  *
  * Dry-run (`dryRun: true`):
- *   Skips storage + email entirely and returns synthetic ids so the
- *   orchestrator can validate the wiring + emit audit events without
- *   producing tenant-visible artefacts. Used by the integration test
- *   and by the eval suite warm-up step.
+ *   Skips storage + channel dispatch entirely and returns synthetic ids
+ *   so the orchestrator can validate the wiring + emit audit events
+ *   without producing tenant-visible artefacts.
  */
 
 import type { AuditClient } from '../hub/audit-client.js';
+import type { ChannelDispatchClient } from '../hub/channel-dispatch-client.js';
 import type {
   AgentProfile,
   ProfileClient,
   TenantSettings,
 } from '../hub/profile-client.js';
 import type { StorageClient } from '../hub/storage-client.js';
-import type { EmailManagerClient } from '../a2a/email-manager-client.js';
 import type { Skill } from './registry.js';
 
 export interface DispatchBriefArgs {
@@ -50,7 +64,7 @@ export interface DispatchBriefArgs {
   readonly body: string;
   /** ISO date used to name the stored artefact (`<date>.md`). */
   readonly date: string;
-  /** If true, skip storage + email and return synthetic ids. */
+  /** If true, skip storage + channel dispatch and return synthetic ids. */
   readonly dryRun?: boolean;
 }
 
@@ -58,11 +72,21 @@ export interface DispatchBriefResult {
   readonly recipients: ReadonlyArray<string>;
   readonly storageUri?: string;
   readonly storageWarning?: string;
+  /**
+   * Carrier-side message id from whichever channel adapter handled the
+   * dispatch. Preserves the old field name so downstream consumers
+   * (run-brief, audit emissions) don't need to change.
+   */
   readonly emailMessageId: string;
+  /** The channel adapter the hub routed to (e.g. 'agentmail', 'web-inbox'). */
+  readonly channelId?: string;
   readonly dryRun: boolean;
 }
 
-export type DispatchErrorKind = 'no_recipients' | 'email_failed' | 'profile_failed';
+export type DispatchErrorKind =
+  | 'no_recipients'
+  | 'dispatch_failed'
+  | 'profile_failed';
 
 export class DispatchError extends Error {
   readonly kind: DispatchErrorKind;
@@ -78,7 +102,7 @@ export class DispatchError extends Error {
 export interface DispatchBriefDeps {
   readonly profile: ProfileClient;
   readonly storage: StorageClient;
-  readonly email: EmailManagerClient;
+  readonly channel: ChannelDispatchClient;
   readonly audit: AuditClient;
   /** Test seam: defaults to `console.warn`. */
   readonly warn?: (line: string, detail?: unknown) => void;
@@ -128,7 +152,8 @@ export function createDispatchBriefSkill(
   const warn = deps.warn ?? ((line, detail) => console.warn(line, detail));
   return {
     name: 'dispatch-brief',
-    description: 'Persist the brief to storage and queue an email draft via the email-manager.',
+    description:
+      'Persist the brief to storage and dispatch it via the hub channel-router (event_id=scheduled_summary).',
     async invoke(args) {
       let profile: AgentProfile;
       let tenant: TenantSettings;
@@ -184,23 +209,29 @@ export function createDispatchBriefSkill(
         warn(`[dispatch-brief] ${storageWarning}`, { path: storagePath });
       }
 
-      // 2. Email draft — required.
-      const emailResult = await deps.email.draftEmail({
-        to: recipients,
-        subject: args.subject,
+      // 2. Channel dispatch — required. Recipients comma-joined because
+      // the channel-dispatch metadata schema disallows array values.
+      const dispatchResult = await deps.channel.dispatch({
+        eventId: 'scheduled_summary',
+        title: args.subject,
         body: args.body,
+        metadata: {
+          recipients: recipients.join(','),
+          storage_uri: storageUri ?? '',
+        },
       });
-      if (!emailResult.ok) {
+      if (!dispatchResult.ok) {
         throw new DispatchError(
-          'email_failed',
-          `dispatch-brief email-manager draftEmail failed: ${emailResult.error.message}`,
-          emailResult.error.code,
+          'dispatch_failed',
+          `dispatch-brief channel dispatch failed: ${dispatchResult.error.message}`,
+          dispatchResult.error.code,
         );
       }
 
       const result: DispatchBriefResult = {
         recipients,
-        emailMessageId: emailResult.messageId,
+        emailMessageId: dispatchResult.messageId,
+        channelId: dispatchResult.channelId,
         dryRun: false,
         ...(storageUri !== undefined ? { storageUri } : {}),
         ...(storageWarning !== undefined ? { storageWarning } : {}),

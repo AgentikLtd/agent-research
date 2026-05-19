@@ -18,9 +18,12 @@
  *      compose-brief is the only LLM call in the run-brief flow) or
  *      `x-agentik/model.default` (manifest fallback) or the hardcoded
  *      `anthropic/claude-sonnet-4-6` fallback.
- *   5. Construct the 5 clients (gateway, profile, storage, audit, email).
+ *   5. Construct the 5 clients (gateway, profile, storage, audit, channel).
  *      Audit defaults to `mode: 'noop'` (the hub doesn't yet expose
  *      `POST /api/audit/emit` — see `src/hub/audit-client.ts` header).
+ *      `channel` POSTs to the hub's `/api/channel/dispatch` route which
+ *      replaced the old direct A2A hop to email-manager — AgentMail is a
+ *      channel adapter, not a specialist's responsibility.
  *   6. Construct the source-adapter map keyed by manifest `sources[*].type`.
  *      `subreddit` aliases to the reddit adapter. `community`, `docs`,
  *      `vendor`, `news` all use the html adapter — they are HTML listing
@@ -50,7 +53,7 @@ import { createGatewayClient } from './llm/gateway-client.js';
 import { createProfileClient } from './hub/profile-client.js';
 import { createStorageClient } from './hub/storage-client.js';
 import { createAuditClient } from './hub/audit-client.js';
-import { createEmailManagerClient } from './a2a/email-manager-client.js';
+import { createChannelDispatchClient } from './hub/channel-dispatch-client.js';
 import { createRssSourceAdapter } from './sources/rss-source.js';
 import { createRedditSourceAdapter } from './sources/reddit-source.js';
 import { createHtmlSourceAdapter } from './sources/html-source.js';
@@ -306,15 +309,12 @@ async function main(): Promise<void> {
     // POST /api/audit/emit isn't wired yet — see hub audit-client header.
     mode: 'noop',
   });
-  // The hub-proxy `/api/agents/<id>/invoke-skill` is keyed by agent ID, so
-  // until the install saga sets EMAIL_MANAGER_AGENT_ID we use a placeholder.
-  // The dispatch-brief skill catches the resulting 404 and degrades.
-  const emailManagerAgentId =
-    process.env['EMAIL_MANAGER_AGENT_ID'] ?? 'email-manager-unresolved';
-  const email = createEmailManagerClient({
+  // Channel dispatch — replaces the old email-manager A2A hop. The hub's
+  // channel-router resolves the actual adapter (agentmail / web-inbox /
+  // telegram …) from the agent's manifest output_channels block.
+  const channel = createChannelDispatchClient({
     hubUrl: env.HUB_BASE_URL,
     token: env.HUB_AGENT_TOKEN,
-    emailManagerAgentId,
   });
 
   // --- source adapters (Phase 3) ---
@@ -340,7 +340,7 @@ async function main(): Promise<void> {
   const registry = createSkillRegistry();
   registry.register(createGatherSourcesSkill({ adapters }));
   registry.register(createComposeBriefSkill({ gateway }));
-  registry.register(createDispatchBriefSkill({ profile, storage, email, audit }));
+  registry.register(createDispatchBriefSkill({ profile, storage, channel, audit }));
   registry.register(createRunBriefSkill({ registry, profile, audit, modelDefault }));
 
   const server = createServer((req, res) => {

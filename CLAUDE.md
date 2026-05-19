@@ -15,8 +15,12 @@ A2A server endpoints (port `4003`):
 - `GET /health`
 - `GET /metrics`
 
-Outbound A2A calls (initially):
-- `agent-email-manager` (deliver a research brief — calls the `draft-email` skill, NOT a direct send).
+Outbound calls:
+- Hub `/api/channel/dispatch` — delivers the brief via the channel-router with
+  `event_id=scheduled_summary` (routes to `agentmail`, falls back to `web-inbox`
+  per `manifest.yaml` `x-agentik/output_channels`). Replaces the prior A2A hop
+  through `agent-email-manager` — AgentMail is a channel, not a specialist's
+  responsibility.
 
 ## Dependencies
 

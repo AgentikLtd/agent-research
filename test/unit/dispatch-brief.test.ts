@@ -9,7 +9,11 @@ import type {
   TenantSettings,
 } from '../../src/hub/profile-client.js';
 import type { StorageClient } from '../../src/hub/storage-client.js';
-import type { EmailManagerClient } from '../../src/a2a/email-manager-client.js';
+import type {
+  ChannelDispatchArgs,
+  ChannelDispatchClient,
+  ChannelDispatchResult,
+} from '../../src/hub/channel-dispatch-client.js';
 import type { AuditClient } from '../../src/hub/audit-client.js';
 
 function makeProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
@@ -56,16 +60,13 @@ function fakeStorage(
   };
 }
 
-function fakeEmail(
-  result: Awaited<ReturnType<EmailManagerClient['draftEmail']>>,
-  capture?: { to?: ReadonlyArray<string>; subject?: string },
-): EmailManagerClient {
+function fakeChannel(
+  result: ChannelDispatchResult,
+  capture?: { args?: ChannelDispatchArgs },
+): ChannelDispatchClient {
   return {
-    async draftEmail(args) {
-      if (capture) {
-        capture.to = args.to;
-        capture.subject = args.subject;
-      }
+    async dispatch(args) {
+      if (capture) capture.args = args;
       return result;
     },
   };
@@ -78,14 +79,14 @@ function fakeAudit(): AuditClient {
 }
 
 describe('createDispatchBriefSkill', () => {
-  it('happy path: writes to storage then queues email and returns both ids', async () => {
+  it('happy path: writes to storage then dispatches via channel and returns messageId+channelId', async () => {
     const profile = makeProfile();
     const tenant: TenantSettings = {
       tenant_id: 'demo1505',
       operator_email: 'ops@example.com',
     };
     const storageCapture: { path?: string; body?: string } = {};
-    const emailCapture: { to?: ReadonlyArray<string>; subject?: string } = {};
+    const channelCapture: { args?: ChannelDispatchArgs } = {};
 
     const skill = createDispatchBriefSkill({
       profile: fakeProfileClient(profile, tenant),
@@ -93,7 +94,10 @@ describe('createDispatchBriefSkill', () => {
         { ok: true, uri: 'workspace://genesys-research/briefs/2026-05-19.md' },
         storageCapture,
       ),
-      email: fakeEmail({ ok: true, messageId: 'gmail_msg_42' }, emailCapture),
+      channel: fakeChannel(
+        { ok: true, messageId: 'mail_msg_42', channelId: 'agentmail' },
+        channelCapture,
+      ),
       audit: fakeAudit(),
     });
 
@@ -105,12 +109,24 @@ describe('createDispatchBriefSkill', () => {
 
     expect(result.dryRun).toBe(false);
     expect(result.storageUri).toBe('workspace://genesys-research/briefs/2026-05-19.md');
-    expect(result.emailMessageId).toBe('gmail_msg_42');
+    expect(result.emailMessageId).toBe('mail_msg_42');
+    expect(result.channelId).toBe('agentmail');
     expect(result.recipients).toEqual(['ops@example.com', 'analyst@example.com']);
+
     expect(storageCapture.path).toBe('genesys-research/briefs/2026-05-19.md');
     expect(storageCapture.body).toBe('# Brief body');
-    expect(emailCapture.to).toEqual(['ops@example.com', 'analyst@example.com']);
-    expect(emailCapture.subject).toBe('Genesys Cloud Weekly Brief — 2026-05-19');
+
+    // Channel dispatch shape: event_id=scheduled_summary, title=subject,
+    // body=markdown, recipients comma-joined in metadata.
+    expect(channelCapture.args?.eventId).toBe('scheduled_summary');
+    expect(channelCapture.args?.title).toBe('Genesys Cloud Weekly Brief — 2026-05-19');
+    expect(channelCapture.args?.body).toBe('# Brief body');
+    expect(channelCapture.args?.metadata?.['recipients']).toBe(
+      'ops@example.com,analyst@example.com',
+    );
+    expect(channelCapture.args?.metadata?.['storage_uri']).toBe(
+      'workspace://genesys-research/briefs/2026-05-19.md',
+    );
   });
 
   it('dedupes recipients across tenant operator_email and profile additional_recipients (case-insensitive)', async () => {
@@ -131,10 +147,14 @@ describe('createDispatchBriefSkill', () => {
       tenant_id: 'demo1505',
       operator_email: 'ops@example.com',
     };
+    const channelCapture: { args?: ChannelDispatchArgs } = {};
     const skill = createDispatchBriefSkill({
       profile: fakeProfileClient(profile, tenant),
       storage: fakeStorage({ ok: true, uri: 'workspace://x' }),
-      email: fakeEmail({ ok: true, messageId: 'mid' }),
+      channel: fakeChannel(
+        { ok: true, messageId: 'mid', channelId: 'agentmail' },
+        channelCapture,
+      ),
       audit: fakeAudit(),
     });
 
@@ -144,6 +164,10 @@ describe('createDispatchBriefSkill', () => {
       date: '2026-05-19',
     });
     expect(result.recipients).toEqual(['ops@example.com', 'analyst@example.com']);
+    // Comma-joined into metadata — preserves the same deduped order.
+    expect(channelCapture.args?.metadata?.['recipients']).toBe(
+      'ops@example.com,analyst@example.com',
+    );
   });
 
   it('throws DispatchError(no_recipients) when both sources are empty', async () => {
@@ -154,7 +178,7 @@ describe('createDispatchBriefSkill', () => {
     const skill = createDispatchBriefSkill({
       profile: fakeProfileClient(profile, tenant),
       storage: fakeStorage({ ok: true, uri: 'workspace://x' }),
-      email: fakeEmail({ ok: true, messageId: 'mid' }),
+      channel: fakeChannel({ ok: true, messageId: 'mid', channelId: 'web-inbox' }),
       audit: fakeAudit(),
     });
 
@@ -168,14 +192,14 @@ describe('createDispatchBriefSkill', () => {
     expect((thrown as DispatchError).kind).toBe('no_recipients');
   });
 
-  it('dryRun: returns synthetic ids without calling storage or email', async () => {
+  it('dryRun: returns synthetic ids without calling storage or channel', async () => {
     const profile = makeProfile();
     const tenant: TenantSettings = {
       tenant_id: 'demo1505',
       operator_email: 'ops@example.com',
     };
     let storageCalled = false;
-    let emailCalled = false;
+    let channelCalled = false;
     const skill = createDispatchBriefSkill({
       profile: fakeProfileClient(profile, tenant),
       storage: {
@@ -184,10 +208,10 @@ describe('createDispatchBriefSkill', () => {
           return { ok: true, uri: 'should-not-be-called' };
         },
       },
-      email: {
-        async draftEmail() {
-          emailCalled = true;
-          return { ok: true, messageId: 'should-not-be-called' };
+      channel: {
+        async dispatch() {
+          channelCalled = true;
+          return { ok: true, messageId: 'should-not-be-called', channelId: 'should-not-be-called' };
         },
       },
       audit: fakeAudit(),
@@ -200,7 +224,7 @@ describe('createDispatchBriefSkill', () => {
       dryRun: true,
     });
     expect(storageCalled).toBe(false);
-    expect(emailCalled).toBe(false);
+    expect(channelCalled).toBe(false);
     expect(result.dryRun).toBe(true);
     expect(result.storageUri).toBe('dryrun://genesys-research/briefs/2026-05-19.md');
     expect(result.emailMessageId).toMatch(/^dryrun-message-/);

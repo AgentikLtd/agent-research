@@ -6,7 +6,8 @@ agent:
   description: |
     Twice-weekly intelligence brief on Genesys Cloud CX — feature releases,
     market shifts, practitioner signal, vendor strategy. Output: one markdown
-    brief delivered via A2A to email-manager + persisted to workspace storage.
+    brief dispatched via the hub channel-router (event_id=scheduled_summary,
+    routes to agentmail / web-inbox) + persisted to workspace storage.
     Audience: a Principal Genesys engineer running a UK motor-insurance
     contact-centre estate.
   vendor: AgentikLtd
@@ -23,9 +24,9 @@ x-agentik/runtime:
   resources: { cpu: shared-1x, memory_mb: 512 }
   required_secrets: []                  # No per-agent OAuth or API keys. Reddit JSON is public; vendor pages public.
   required_external_services:
-    - { name: hub_llm_gateway, url_env: HUB_BASE_URL }
-    - { name: email_manager_a2a, agent: email-manager }
-    - { name: hub_storage,      url_env: HUB_BASE_URL }
+    - { name: hub_llm_gateway,      url_env: HUB_BASE_URL }
+    - { name: hub_channel_dispatch, url_env: HUB_BASE_URL }
+    - { name: hub_storage,          url_env: HUB_BASE_URL }
   egress_allowlist:
     - orchestrators.genesys.com         # Beyond Community
     - help.genesys.cloud                # Administrator help / release notes
@@ -77,13 +78,22 @@ x-agentik/memory:
   procedural: { enabled: false }        # Defer — QMD backend gap
 
 x-agentik/output_channels:
-  scheduled_brief:
-    - { adapter: 'a2a:email-manager', event: draft-email, payload: { subjectTemplate: 'Genesys Cloud CX Brief — {date}' } }
-  # Fallback: if A2A to email-manager fails, the run-brief skill still writes the markdown to
-  # storage. The operator script reports the storage path on error so the brief is recoverable.
+  # Refactored 2026-05-19: dispatch-brief now POSTs the brief directly to the
+  # hub's /api/channel/dispatch route with event_id=scheduled_summary. The hub
+  # channel-router consults this block (landed into agent_profiles.config by the
+  # install saga) to resolve the actual channel adapter. AgentMail is the
+  # primary; web-inbox is the fallback for tenants without AgentMail wired.
+  # Format mirrors agent-email-manager's manifest.
+  - event_id: scheduled_summary
+    routes_to: [agentmail]
+    fallback_order: [agentmail, web-inbox]
+  # Storage fallback: if dispatch fails, the run-brief skill still has the
+  # markdown written to workspace storage; operator scripts surface the path so
+  # the brief is recoverable.
 
-x-agentik/dependencies:
-  - { agent: email-manager, reason: 'outbound delivery via draft-email skill' }
+x-agentik/dependencies: []
+  # No inter-agent dependencies. Outbound delivery goes through the hub's
+  # channel-router (POST /api/channel/dispatch), not a sibling specialist.
 
 x-agentik/knowledge:
   enabled: false                        # ADR-0007 RAG not built; sources live in profile.config instead
