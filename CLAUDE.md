@@ -20,7 +20,7 @@ Outbound A2A calls (initially):
 
 ## Dependencies
 
-- `@agentik/shared-types` (manifest, A2A, channel, gateway types) — `workspace:*` for now; npm-publish in Phase 0a.
+- A2A + LLM-gateway types — **vendored** under `src/contracts.ts` (mirrors `agent-briefing`'s standalone pattern). NOT a workspace dep. Sync at every `@agentik/shared-types` upgrade; see `src/contracts.ts` §Update log.
 - `@anthropic-ai/sdk` (typing only — actual completions are proxied through the studio hub's LLM gateway).
 - HTTP fetch (research sources) — all calls go through the studio's egress allowlist; each adapter follows the workspace `harden-http-adapter` checklist.
 - OpenTelemetry (OTLP HTTP exporter for the studio's collector).
@@ -76,12 +76,12 @@ Flavors are **co-tenanted at runtime** — a tenant enables which flavors it wan
 - `../../docs/memory.md` — workspace chronological ledger of lessons.
 - `../agent-briefing/CLAUDE.md` — sibling specialist; reference for the canonical specialist-agent shape.
 - The skill(s) you're editing under `skills/` + `src/skills/`.
-- `@agentik/shared-types/<subpath>` types only.
+- `src/contracts.ts` (vendored A2A + gateway slices) instead of `@agentik/shared-types/*`.
 - `../docs/prd.md` §4.6 (research-agent scope) and `../docs/architecture.md` Appendix D (manifest schema).
 
 ## Files NOT to load
 
-- Other agents' source (consume `@agentik/shared-types` types only).
+- Other agents' source (consume vendored slices in `src/contracts.ts` only).
 - Studio's source.
 - `node_modules/`, `dist/`, `.turbo/`, `coverage/`.
 - `.env*` (except `.env.example`).
@@ -104,6 +104,5 @@ Flavors are **co-tenanted at runtime** — a tenant enables which flavors it wan
 
 ## Open issues / blockers
 
-- `@agentik/shared-types: workspace:*` will not resolve until the repo joins the pnpm workspace OR shared-types is npm-published (Phase 0a). `pnpm install` will fail with `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND` until then — expected.
-- Manifest CI validation step deferred to Phase 6 (same shared-types npm-publish gate).
+- Manifest CI validation step deferred to Phase 6 (validator script lives under workspace `scripts/validate-manifest.mjs` and is invoked locally; CI hook still TODO).
 - Audit-gates CI job references `scripts/audit-prod.mjs`, `scripts/validate-env-drift.mjs`, `scripts/validate-ci-templates.mjs` which are NOT vendored yet — Phase 2 work copies these from the briefing repo.
