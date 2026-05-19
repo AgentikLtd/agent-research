@@ -26,7 +26,7 @@ import type {
   LlmMessage,
   LlmTool,
   LlmUsage,
-} from '@agentik/shared-types/gateway';
+} from '../contracts.js';
 
 export interface LlmSendRequest {
   readonly model: string;

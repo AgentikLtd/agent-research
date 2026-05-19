@@ -19,11 +19,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agentik/shared-types": "workspace:*",
     "@anthropic-ai/sdk": "^0.30.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.217.0",
+    "@opentelemetry/resources": "^2.0.0",
     "@opentelemetry/sdk-node": "^0.217.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.0",
+    "@opentelemetry/semantic-conventions": "^1.36.0",
     "yaml": "^2.6.0",
     "zod": "^3.23.0"
   },

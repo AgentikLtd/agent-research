@@ -11,7 +11,7 @@
  * exist in the source list?) can layer in via the eval suite.
  */
 
-import type { LlmContentPart, LlmMessage } from '@agentik/shared-types/gateway';
+import type { LlmContentPart, LlmMessage } from '../contracts.js';
 import type { GatewayClient } from '../llm/gateway-client.js';
 import { buildComposePrompt } from '../prompts/compose-brief-prompt.js';
 import type { SourceItem } from '../sources/contracts.js';
