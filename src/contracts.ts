@@ -16,6 +16,9 @@
  * §Update log
  *   - 2026-05-19 — initial vendor (Phase 6 of agent-research scaffold).
  *                  Sourced from shared-types @ commit on `main`.
+ *   - 2026-05-20 — added LlmServerTool + LlmRequestTool (ADR-0018 web_search
+ *                  server tool support); LlmRequest.tools widened to
+ *                  LlmRequestTool[].
  */
 
 // ---------------------------------------------------------------------------
@@ -156,6 +159,19 @@ export interface LlmTool {
   readonly inputSchema: unknown;
 }
 
+/**
+ * Provider-native server tool — runs in-flight, no client round-trip.
+ * Mirrors `@agentik/shared-types/gateway` `LlmServerTool` (ADR-0018).
+ */
+export interface LlmServerTool {
+  readonly kind: 'server';
+  readonly tool: 'web_search';
+  readonly maxResults?: number;
+}
+
+/** Either a client tool or a provider server tool. */
+export type LlmRequestTool = LlmTool | LlmServerTool;
+
 /** Tool-use hint passed alongside an `LlmRequest`. */
 export type LlmToolChoice =
   | { readonly kind: 'auto' }
@@ -229,7 +245,7 @@ export interface LlmRequest {
   readonly providerId?: LlmProviderId;
   readonly messages: readonly LlmMessage[];
   readonly system?: string;
-  readonly tools?: readonly LlmTool[];
+  readonly tools?: readonly LlmRequestTool[];
   readonly toolChoice?: LlmToolChoice;
   readonly params: LlmGenerationParams;
   readonly metadata?: Readonly<Record<string, string>>;
