@@ -219,8 +219,11 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const topic = pickBriefDescription(profile);
         const modelOverride = args.model ?? pickModel(profile);
         const prioritySources = pickPrioritySources(profile);
-        const withModel = <A extends { model?: string }>(a: A): A =>
-          modelOverride !== undefined ? { ...a, model: modelOverride } : a;
+        // withModel injects the per-run model override. Typed as a Record spread
+        // to avoid exactOptionalPropertyTypes errors on the individual skill Args types.
+        function withModel<A extends Record<string, unknown>>(a: A): A {
+          return modelOverride !== undefined ? ({ ...a, model: modelOverride } as A) : a;
+        }
 
         // --- Stage 1: plan ---
         stage = 'plan';

@@ -1,0 +1,166 @@
+[
+  {
+    "claim": "Genesys Cloud CX launched native digital outbound campaigns with email and SMS channels in GA status as of May 2026.",
+    "detail": "The GA release adds drag-and-drop campaign builder, suppression-list integration, and opt-out compliance automation. Previously available in BETA since Q4 2025, the feature is now fully supported in all regions. Early adopters report a 30% reduction in campaign setup time compared to legacy on-premise dialler configurations.",
+    "label": "GA",
+    "confidence": "high",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://help.genesys.cloud/administrators/outbound-campaigns", "title": "Outbound Campaigns — Administrator Guide", "publisher": "Genesys" },
+      { "url": "https://www.cxtoday.com/genesys/genesys-cloud-cx-outbound-digital-ga", "title": "Genesys Cloud CX Goes GA on Digital Outbound", "publisher": "CX Today" }
+    ],
+    "flags": [],
+    "publishedAt": "2026-05-12T09:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys Copilot sentiment coaching now surfaces real-time tone suggestions to agents during live voice interactions.",
+    "detail": "The BETA update adds a persistent coaching overlay visible only to agents, scoring sentiment in 2-second rolling windows. Internal Genesys data from 12 pilot contact centres shows a 14% reduction in customer escalations. The feature requires the Copilot add-on licence and is available only in US and EU regions at BETA stage.",
+    "label": "BETA",
+    "confidence": "high",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://www.genesys.com/en-gb/company/newsroom/genesys-copilot-sentiment-coaching", "title": "Genesys Copilot Gains Real-Time Sentiment Coaching", "publisher": "Genesys Newsroom" }
+    ],
+    "flags": ["vendor-marketing"],
+    "publishedAt": "2026-05-08T14:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys plans to release Agent AI Autopilot — a fully autonomous contact-handling mode — in Q3 2026 for complex inbound queries.",
+    "detail": "The roadmap item was disclosed in a Genesys Beyond Community webinar. Autopilot would allow the AI to handle multi-turn inbound calls end-to-end with no agent in loop, escalating only when sentiment drops below a configurable threshold. No public release date has been given beyond 'Q3 2026'. The feature is listed as ROADMAP in the Genesys Cloud CX product backlog surfaced at the webinar.",
+    "label": "ROADMAP",
+    "confidence": "medium",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://orchestrators.genesys.com/community?product=genesys-cloud-cx&post=autopilot-q3", "title": "Beyond Community: Autopilot Roadmap Webinar Summary", "publisher": "Genesys Beyond Community" }
+    ],
+    "flags": ["single-source"],
+    "publishedAt": "2026-05-14T11:00:00Z",
+    "verdict": "unverified"
+  },
+  {
+    "claim": "Multiple r/callcentres users report that Genesys Cloud CX Workforce Management shift-swap approval latency increased from under 1 minute to 10+ minutes after the May 6 platform update.",
+    "detail": "Eight separate thread posts across a 72-hour window document the same symptom: shift-swap notifications are delivered promptly, but supervisor approval actions take 10–15 minutes to propagate back to the agent UI. Genesys support acknowledged the issue on May 10 and confirmed a fix was included in the May 13 patch. No official incident report has been published externally.",
+    "label": "GA",
+    "confidence": "medium",
+    "category": "community_signal",
+    "sources": [
+      { "url": "https://www.reddit.com/r/callcentres/comments/wfm_shift_swap_latency", "title": "r/callcentres: WFM shift-swap taking forever after update?", "publisher": "Reddit" },
+      { "url": "https://orchestrators.genesys.com/community?product=genesys-cloud-cx&post=wfm-latency-may", "title": "Beyond Community: WFM shift-swap latency thread", "publisher": "Genesys Beyond Community" }
+    ],
+    "flags": ["single-source", "user-report"],
+    "publishedAt": "2026-05-07T08:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys has acquired conversational AI company DialogFlow-EU, a Paris-based startup specialising in GDPR-native dialogue management.",
+    "detail": "This claim circulated on LinkedIn and was picked up by one trade blog. No announcement has appeared on the Genesys newsroom, SEC filings, or official press releases. The DialogFlow-EU website remains unchanged. The claim appears to conflate a partnership announcement (a DialogFlow-EU and Genesys integration certified in April 2026) with an acquisition.",
+    "label": "RUMOUR",
+    "confidence": "low",
+    "category": "vendor_strategy",
+    "sources": [
+      { "url": "https://www.cxtoday.com/genesys/acquisition-rumour-dialogflow-eu", "title": "Rumour: Genesys acquires DialogFlow-EU — unconfirmed", "publisher": "CX Today" }
+    ],
+    "flags": ["single-source", "conflicting", "vendor-marketing"],
+    "publishedAt": "2026-05-15T16:00:00Z",
+    "verdict": "disputed"
+  },
+  {
+    "claim": "Genesys Cloud CX now supports bring-your-own-telephony (BYOT) from any SIP-compliant carrier, removing the previous restriction to approved carrier partners.",
+    "detail": "The GA release eliminates the whitelist of approved BYOT carriers. Contact centre operators can now connect any SIP-compliant PSTN carrier without requesting Genesys approval. The change is documented in the May 2026 Administrator release notes. Practitioners on Beyond Community confirm the change is live and tested with BT Wholesale and Vonage.",
+    "label": "GA",
+    "confidence": "high",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://help.genesys.cloud/administrators/release-notes/may-2026", "title": "May 2026 Release Notes — Genesys Cloud CX", "publisher": "Genesys" },
+      { "url": "https://orchestrators.genesys.com/community?product=genesys-cloud-cx&post=byot-open-carrier", "title": "Beyond Community: BYOT now open to any SIP carrier", "publisher": "Genesys Beyond Community" }
+    ],
+    "flags": [],
+    "publishedAt": "2026-05-01T00:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys Architect flow designer introduced a visual debugger in BETA, allowing supervisors to step through flow execution against a live call in read-only mode.",
+    "detail": "The visual debugger highlights the current node, shows variable values, and records a playback trace for post-mortem analysis. It is available in BETA to tenants on the Genesys Cloud CX 3 plan or above. The feature was announced at Genesys Xperience 2026 and entered BETA on May 5. Known limitation: the debugger cannot attach to calls already in progress; it must be activated before the call begins.",
+    "label": "BETA",
+    "confidence": "high",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://help.genesys.cloud/administrators/architect/visual-debugger-beta", "title": "Architect Visual Debugger (BETA) — Genesys", "publisher": "Genesys" },
+      { "url": "https://www.genesys.com/en-gb/company/newsroom/xperience-2026-announcements", "title": "Genesys Xperience 2026: All Announcements", "publisher": "Genesys Newsroom" }
+    ],
+    "flags": ["vendor-marketing"],
+    "publishedAt": "2026-05-05T10:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys and Salesforce announced a deepened integration placing Genesys AI routing decisions directly inside Salesforce Service Cloud Einstein dashboards.",
+    "detail": "The joint announcement was made at Salesforce Connections 2026. The integration surfaces Genesys predictive routing scores and wait-time estimates inside Salesforce supervisor dashboards without switching applications. GA for Salesforce Service Cloud users on Genesys Cloud CX 2 and above; requires both Einstein Analytics and Genesys Predictive Routing licences.",
+    "label": "GA",
+    "confidence": "high",
+    "category": "vendor_strategy",
+    "sources": [
+      { "url": "https://www.genesys.com/en-gb/company/newsroom/salesforce-connections-2026-integration", "title": "Genesys x Salesforce: Deeper Integration at Connections 2026", "publisher": "Genesys Newsroom" },
+      { "url": "https://www.cxtoday.com/genesys/salesforce-genesys-einstein-routing-integration", "title": "Genesys Brings AI Routing Scores into Salesforce Einstein", "publisher": "CX Today" }
+    ],
+    "flags": [],
+    "publishedAt": "2026-05-18T12:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys Cloud CX plans to deprecate the legacy On-Premises Connector API (version 1.x) in Q1 2027, with a migration guide to the new cloud-native Events API targeted for H2 2026.",
+    "detail": "The deprecation timeline was communicated in a March 2026 developer newsletter and confirmed in a Beyond Community post by a Genesys product manager. Tenants using the v1 Connector API for real-time event streaming will need to migrate to the Events API v2, which uses webhooks and Server-Sent Events rather than persistent TCP connections. A migration assistant tool is on the ROADMAP for H2 2026.",
+    "label": "ROADMAP",
+    "confidence": "medium",
+    "category": "vendor_strategy",
+    "sources": [
+      { "url": "https://orchestrators.genesys.com/community?product=genesys-cloud-cx&post=connector-api-deprecation", "title": "Beyond Community: Connector API v1 deprecation notice", "publisher": "Genesys Beyond Community" },
+      { "url": "https://developer.genesys.cloud/news/2026-03-connector-api-deprecation", "title": "Developer Newsletter March 2026 — Connector API Deprecation", "publisher": "Genesys Developer Hub" }
+    ],
+    "flags": ["single-source"],
+    "publishedAt": "2026-03-15T00:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Talkdesk launched an aggressive Genesys Cloud CX migration programme offering free professional services for customers switching before September 2026.",
+    "detail": "Talkdesk published a dedicated landing page and partnered with three UK systems integrators (Sabio, Puzzel UK, and Cloud9) to offer zero-cost migration assessments and first-year implementation support for Genesys CX3 customers. The offer is positioned explicitly against Genesys renewals due in H2 2026. CX Today rated the programme as credible market pressure on Genesys mid-market renewals.",
+    "label": "CONTEXT",
+    "confidence": "medium",
+    "category": "market_trends",
+    "sources": [
+      { "url": "https://www.cxtoday.com/market/talkdesk-genesys-migration-offer-2026", "title": "Talkdesk Launches Free Migration Programme Targeting Genesys Customers", "publisher": "CX Today" }
+    ],
+    "flags": ["vendor-marketing"],
+    "publishedAt": "2026-05-10T09:00:00Z",
+    "verdict": "confirmed"
+  },
+  {
+    "claim": "Genesys AI Quality Management will enter BETA in June 2026 with automated scoring of 100% of voice interactions against configurable rubrics.",
+    "detail": "The feature uses a fine-tuned LLM to transcribe and evaluate every call against custom quality rubrics without sampling. Supervisors define rubric criteria in natural language; the AI assigns a score and evidence snippet per criterion. BETA access requires enrolment via the Genesys partner portal. GA is targeted for Q4 2026 per the product roadmap slide deck leaked from the Xperience 2026 partner day.",
+    "label": "BETA",
+    "confidence": "medium",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://www.genesys.com/en-gb/company/newsroom/ai-quality-management-beta", "title": "Genesys AI Quality Management: BETA Programme Open", "publisher": "Genesys Newsroom" },
+      { "url": "https://orchestrators.genesys.com/community?product=genesys-cloud-cx&post=ai-qm-beta-signup", "title": "Beyond Community: AI Quality Management BETA sign-up thread", "publisher": "Genesys Beyond Community" }
+    ],
+    "flags": ["vendor-marketing", "single-source"],
+    "publishedAt": "2026-05-16T00:00:00Z",
+    "verdict": "unverified"
+  },
+  {
+    "claim": "Genesys Cloud CX workforce management module introduced a GenAI-powered schedule optimiser in BETA, generating weekly schedules from historical call volume patterns with minimal supervisor input.",
+    "detail": "The optimiser uses 13 weeks of historical ACD data to forecast volume by 15-minute interval and generate compliant schedules respecting contracted hours, skills, and labour rules. BETA tenants report schedule generation time reduced from 4 hours to under 10 minutes. The BETA is available to tenants with the Workforce Engagement Management add-on.",
+    "label": "BETA",
+    "confidence": "high",
+    "category": "feature_releases",
+    "sources": [
+      { "url": "https://help.genesys.cloud/administrators/wfm/genai-schedule-optimiser-beta", "title": "GenAI Schedule Optimiser BETA — Genesys WFM", "publisher": "Genesys" },
+      { "url": "https://www.cxtoday.com/genesys/genai-wfm-schedule-optimiser-beta", "title": "Genesys WFM Gets GenAI Schedule Optimiser in BETA", "publisher": "CX Today" }
+    ],
+    "flags": [],
+    "publishedAt": "2026-05-13T08:00:00Z",
+    "verdict": "confirmed"
+  }
+]
