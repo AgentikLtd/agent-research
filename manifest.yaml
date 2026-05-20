@@ -2,32 +2,86 @@ schema_version: a2a/1.2
 
 agent:
   name: genesys-research
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Twice-weekly intelligence brief on Genesys Cloud CX — feature releases,
-    market shifts, practitioner signal, vendor strategy. Output: one markdown
-    brief dispatched via the hub channel-router (event_id=scheduled_summary,
-    routes to agentmail / web-inbox) + persisted to workspace storage.
+    market shifts, practitioner signal, vendor strategy. Decomposes the topic,
+    runs parallel autonomous web researchers, verifies findings adversarially,
+    then synthesises a styled brief. Output: one markdown brief dispatched via
+    the hub channel-router (event_id=scheduled_summary, routes to agentmail /
+    web-inbox) + persisted to workspace storage.
     Audience: a Principal Genesys engineer running a UK motor-insurance
     contact-centre estate.
   vendor: AgentikLtd
   homepage: https://github.com/AgentikLtd/agent-research
   endpoints:
-    a2a: http://localhost:4003/a2a
-    health: http://localhost:4003/health
-  capabilities: [skills.invoke, schedule.fire]
-  skills: [run-brief, gather-sources, compose-brief, dispatch-brief]
-  authentication: { type: bearer }
+    base_url: http://localhost:4003
+    a2a: /a2a
+    health: /health
+    chat: /a2a
+    metrics: /metrics
+    lifecycle: /lifecycle
+  capabilities:
+    streaming: false
+    push_notifications: false
+    long_running_tasks: true
+  skills:
+    - id: run-brief
+      description: Orchestrate plan → research → challenge → synthesize → dispatch.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+    - id: plan-research
+      description: Decompose a research topic into focused, rounded research angles.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+    - id: research-angle
+      description: Autonomously research one angle with web search; emit Finding[].
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+    - id: challenge-findings
+      description: Adversarially verify researcher findings with independent web search.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+    - id: synthesize-brief
+      description: Synthesise verified findings into the final styled markdown brief.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+    - id: dispatch-brief
+      description: Deliver the brief via the hub channel-router and persist to storage.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+    - id: gather-sources
+      description: Fetch and normalise source items from configured research sources.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: a2a
+  authentication:
+    schemes: [bearer]
+
+x-agentik/lifecycle:
+  install_script: scripts/install.sh
+  uninstall_script: scripts/uninstall.sh
+  data_handling_on_uninstall: prompt
+  estimated_storage_mb_per_month: 50
 
 x-agentik/runtime:
-  container_image: ghcr.io/agentikltd/agent-research:0.1.2
-  resources: { cpu: shared-1x, memory_mb: 512 }
+  container_image: ghcr.io/agentikltd/agent-research:0.2.0
+  resources:
+    memory_mb: 512
+    cpu: 0.5
   required_secrets: []                  # No per-agent OAuth or API keys. Reddit JSON is public; vendor pages public.
   required_external_services:
-    - { name: hub_llm_gateway,      url_env: HUB_BASE_URL }
-    - { name: hub_channel_dispatch, url_env: HUB_BASE_URL }
-    - { name: hub_storage,          url_env: HUB_BASE_URL }
+    - hub_llm_gateway
+    - hub_channel_dispatch
+    - hub_storage
   egress_allowlist:
+    # Web search runs on OpenRouter's infrastructure (ADR-0018); no article-domain entries needed.
     - orchestrators.genesys.com         # Beyond Community
     - help.genesys.cloud                # Administrator help / release notes
     - www.reddit.com                    # r/callcentres
@@ -39,111 +93,86 @@ x-agentik/model:
   recommended_for_quality: anthropic/claude-opus-4-7
   minimum_capable: anthropic/claude-haiku-4-5-20251001
   per_skill_overrides:
-    compose-brief: anthropic/claude-opus-4-7  # The brief is the only LLM call; quality matters
-  provider_preference: [openrouter, anthropic]  # OpenRouter first, Anthropic fallback per ADR-0001
+    plan-research:      anthropic/claude-haiku-4-5-20251001
+    research-angle:     anthropic/claude-sonnet-4-6
+    challenge-findings: anthropic/claude-sonnet-4-6
+    synthesize-brief:   anthropic/claude-opus-4-7
+  provider_preference:
+    - any
+  required_capabilities:
+    tool_use: full
+    prompt_caching: preferred
 
 x-agentik/budget:
-  hourly_max_gbp: 0.50
-  daily_max_gbp:  2.00
-  per_task:
-    input_tokens_max: 60000
-    output_tokens_max: 8000
-  max_turns: 20                         # Today compose-brief is a single LLM call (1 turn). 20 leaves
-                                        # headroom for future tool use inside compose-brief (citation
-                                        # verification, multi-step source filtering) without making the
-                                        # cap meaningless. Hourly/daily GBP caps are the binding safety
-                                        # net; max_turns is a runaway-loop guard.
+  hourly_soft_cap_gbp: 1.00
+  hourly_hard_cap_gbp: 2.00
+  daily_hard_cap_gbp: 5.00
+  per_task_token_cap: 200000
+  max_turns: 20
+  cost_aware_fallback_model: anthropic/claude-sonnet-4-6
 
 x-agentik/schedule:
-  - name: produce-brief-tue
-    cron: '0 6 * * 2'                  # Tue 06:00
-    timezone: Europe/London
-    policy: collapse                    # Don't catch up missed Tuesdays
-    target: { skill: run-brief, args: { since: '-72h' } }
-  - name: produce-brief-thu
-    cron: '0 6 * * 4'                  # Thu 06:00
-    timezone: Europe/London
-    policy: collapse
-    target: { skill: run-brief, args: { since: '-72h' } }
+  scheduled_tasks:
+    - id: produce-brief-tue
+      schedule: "0 6 * * 2"            # Tue 06:00
+      task: run-brief
+      missed_run_policy: skip
+      timezone: Europe/London
+    - id: produce-brief-thu
+      schedule: "0 6 * * 4"            # Thu 06:00
+      task: run-brief
+      missed_run_policy: skip
+      timezone: Europe/London
 
 x-agentik/storage:
-  namespace: genesys-research
-  workspace_paths:
-    write: [genesys/briefs/]
-    read:  [genesys/briefs/]
+  primary: namespace
+  estimated_size_gb: 0.2
+  workspace_required: true
+  read_access:
+    - agent: genesys-research
+      paths:
+        - workspace://genesys/briefs/*
+  write_access:
+    - agent: genesys-research
+      paths:
+        - workspace://genesys/briefs/*
 
 x-agentik/memory:
-  episodic: { backend: postgres, schema_suffix: episodic }
-  semantic: { enabled: false }          # Defer — pgvector subsystem not yet RAG-wired
-  procedural: { enabled: false }        # Defer — QMD backend gap
+  episodic:
+    backend: postgres
+    retention_days: 90
+  semantic:
+    backend: pgvector
+    embedding_model: text-embedding-3-small
+    decay: relevance_threshold
+  procedural:
+    backend: qmd
+    path: skills/
 
 x-agentik/output_channels:
-  # Refactored 2026-05-19: dispatch-brief now POSTs the brief directly to the
-  # hub's /api/channel/dispatch route with event_id=scheduled_summary. The hub
-  # channel-router consults this block (landed into agent_profiles.config by the
-  # install saga) to resolve the actual channel adapter. AgentMail is the
-  # primary; web-inbox is the fallback for tenants without AgentMail wired.
-  # Format mirrors agent-email-manager's manifest.
-  - event_id: scheduled_summary
+  - id: scheduled_summary
     routes_to: [agentmail]
     fallback_order: [agentmail, web-inbox]
-  # Storage fallback: if dispatch fails, the run-brief skill still has the
-  # markdown written to workspace storage; operator scripts surface the path so
-  # the brief is recoverable.
 
-x-agentik/dependencies: []
-  # No inter-agent dependencies. Outbound delivery goes through the hub's
-  # channel-router (POST /api/channel/dispatch), not a sibling specialist.
+x-agentik/dependencies:
+  shares_data_with: []
+
+x-agentik/quality:
+  eval_suite_dir: ./test/evals
+  baseline_scorecard: ./test/evals/scorecards/baseline.json
+  right_model_audit_cadence: quarterly
 
 x-agentik/knowledge:
-  enabled: false                        # ADR-0007 RAG not built; sources live in profile.config instead
+  enabled: false
+  max_size_mb: 500
+  auto_refresh_url_days: 7
+  embedding_model: text-embedding-3-small
+  allowed_callers: []
 
-x-agentik/defaults:
-  profile:
-    config:
-      persona:
-        voice: |
-          Direct, plain English, senior-engineer-to-senior-engineer. State the
-          finding, then the evidence, then the 'so what' in one line. British
-          English spelling.
-        avoid:
-          - 'Opening compliments or acknowledgements'
-          - "'Exciting', 'game-changing', 'revolutionary', 'cutting-edge', 'leverage', 'unlock', 'empower'"
-          - "'In today''s fast-moving landscape' and similar throat-clearing"
-          - 'Hedging language used to pad'
-          - 'Editorialising about how interesting or important something is'
-          - 'Emoji and exclamation marks outside of quoted material'
-          - "Restating the user''s request"
-        audience: |
-          One reader: a Principal Genesys Cloud engineer with 25+ years of
-          contact-centre experience. Assume technical fluency. Skip the 101s.
-      guardrails:
-        - { id: g1, rule: 'Every factual claim carries an inline [n] citation mapping to a numbered source at the end.' }
-        - { id: g2, rule: 'If a claim cannot be verified against at least one named, dated source, omit it. Speculation is not permitted.' }
-        - { id: g3, rule: 'Never invent release dates, feature names, version numbers, exec quotes, or roadmap items.' }
-        - { id: g4, rule: 'Label every reported item with one of: GA, BETA, ROADMAP, RUMOUR. Items without enough evidence to label belong in the noise log, not the brief.' }
-        - { id: g5, rule: 'Date-stamp every item. Anything older than 14 days from today is omitted or flagged CONTEXT, NOT NEWS.' }
-        - { id: g6, rule: 'Flag any source that reads as vendor marketing, partner sales copy, or potentially-sponsored analyst content.' }
-        - { id: g7, rule: 'When two sources conflict on a material fact, surface the conflict and cite both. Do not pick a side.' }
-        - { id: g8, rule: 'Reddit / Beyond Community / forum posts are signal, not fact. User reports require corroboration from vendor docs, release notes, or a second independent source before being stated as fact.' }
-      sources:
-        - { id: beyond-cx,        label: 'Genesys Beyond Community — Genesys Cloud CX', url: 'https://orchestrators.genesys.com/community?product=genesys-cloud-cx', type: community, focus: 'Practitioner discussion, real-world implementation issues, feature requests', credibility: medium }
-        - { id: beyond-home,      label: 'Genesys Beyond — Home',                      url: 'https://orchestrators.genesys.com/home',                                  type: community, focus: 'Community announcements, partner-led webinars',                       credibility: medium }
-        - { id: help-admin,       label: 'Genesys Cloud Administrator Help',           url: 'https://help.genesys.cloud/administrators/',                              type: docs,      focus: 'Authoritative source for GA features and release notes',              credibility: high }
-        - { id: reddit-callcentres, label: 'r/callcentres',                              url: 'callcentres',                                                             type: subreddit, focus: 'Operator-side perspective; sentiment on Genesys vs alternatives',     credibility: low }
-        - { id: vendor-newsroom,  label: 'Genesys Newsroom (UK)',                      url: 'https://www.genesys.com/en-gb/company/newsroom',                          type: vendor,    focus: 'Official vendor announcements',                                          credibility: medium }
-        - { id: cxtoday-genesys,  label: 'CX Today — Genesys vendor page',             url: 'https://www.cxtoday.com/vendor/genesys/',                                 type: news,      focus: 'Industry coverage of Genesys',                                           credibility: medium }
-      output:
-        destination_subject_prefix: 'Genesys Cloud CX Brief'
-        schedule_label: 'Tue/Thu 06:00 BST'
-        additional_recipients: []           # Per-agent additive list. Concatenated to the tenant-canonical
-                                            # operator_email (sourced from tenant_settings, not from this
-                                            # manifest). Empty by default; operator edits via UI post-install.
-        markdown_sections:
-          - headline
-          - feature_releases
-          - market_trends
-          - community_signal
-          - vendor_strategy
-          - noise_log
-          - sources
+# NOTE: The agent_profiles.config defaults (persona, guardrails, sources, output)
+# are provisioned by the install saga from the AgentikLtd agent-template-registry
+# and not stored in manifest.yaml (x-agentik/defaults is not in the schema).
+# The per-run model override and web_search.max_results are documented here
+# as a reference for operators:
+#   - run-brief accepts { model: "<openrouter-slug>" } to pin the pipeline per run.
+#   - web_search max_results defaults to 6 in the research-angle + challenge-findings skills.
