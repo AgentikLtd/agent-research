@@ -13,7 +13,7 @@ agent:
   vendor: AgentikLtd
   homepage: https://github.com/AgentikLtd/agent-research
   endpoints:
-    jsonrpc: http://localhost:4003/jsonrpc
+    a2a: http://localhost:4003/a2a
     health: http://localhost:4003/health
   capabilities: [skills.invoke, schedule.fire]
   skills: [run-brief, gather-sources, compose-brief, dispatch-brief]
