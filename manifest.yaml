@@ -20,7 +20,7 @@ agent:
   authentication: { type: bearer }
 
 x-agentik/runtime:
-  container_image: ghcr.io/agentikltd/agent-research:0.1.0
+  container_image: ghcr.io/agentikltd/agent-research:0.1.1
   resources: { cpu: shared-1x, memory_mb: 512 }
   required_secrets: []                  # No per-agent OAuth or API keys. Reddit JSON is public; vendor pages public.
   required_external_services:
