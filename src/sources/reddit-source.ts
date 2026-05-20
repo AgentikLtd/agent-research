@@ -54,7 +54,16 @@ export function createRedditSource(deps: RedditSourceDeps = {}): RedditSource {
 
   return {
     async fetchSubreddit(subreddit) {
-      const clean = subreddit.replace(/^r\//, '').trim();
+      // Accept a bare name (`callcentres`), an `r/`-prefixed name, or a
+      // full reddit URL (`https://www.reddit.com/r/callcentres/`) — the
+      // manifest convention is the bare name, but tolerate the URL form
+      // so a mis-specified source degrades to a correct fetch, not a 404.
+      const clean = subreddit
+        .trim()
+        .replace(/^https?:\/\/(www\.)?reddit\.com/i, '')
+        .replace(/^\/?r\//i, '')
+        .replace(/\/.*$/, '')
+        .trim();
       if (!clean) return [];
       const url = `https://www.reddit.com/r/${encodeURIComponent(clean)}/top.json?t=${window}&limit=${String(limit)}`;
       const res = await fetcher(url, { headers: { 'user-agent': ua, accept: 'application/json' } });
@@ -73,8 +82,9 @@ export function createRedditSource(deps: RedditSourceDeps = {}): RedditSource {
 
 /**
  * Phase-5 contract adapter. `input.url` is treated as the subreddit name
- * (with or without `r/` prefix). `input.sourceId` overrides the default
- * `r/<sub>` sourceId. `input.since` filters items by `publishedAt`.
+ * (bare, `r/`-prefixed, or a full `reddit.com/r/<sub>` URL — all
+ * normalised). `input.sourceId` overrides the default `r/<sub>`
+ * sourceId. `input.since` filters items by `publishedAt`.
  */
 export function createRedditSourceAdapter(deps: RedditSourceDeps = {}): SourceAdapter {
   const inner = createRedditSource(deps);
