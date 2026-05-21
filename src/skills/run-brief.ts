@@ -237,8 +237,16 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             }),
           );
           angles = planned.angles.length > 0 ? planned.angles.slice(0, maxAngles) : [topic];
-        } catch {
-          angles = [topic]; // degrade — research the whole topic as one angle
+        } catch (e) {
+          // degrade — research the whole topic as one angle. Log it: a
+          // silent degrade looks identical to a model that simply returned
+          // one angle, which makes plan-stage issues invisible.
+          console.warn(
+            `[run-brief] plan-research failed, degrading to a single angle: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+          angles = [topic];
         }
         await deps.audit.emit({
           eventType: 'research.planned',
@@ -279,8 +287,14 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             ChallengeFindingsResult
           >('challenge-findings', withModel({ findings: rawFindings, topic, since, until }));
           adjudicated = challenged.findings;
-        } catch {
-          adjudicated = rawFindings; // degrade — synthesise un-adjudicated findings
+        } catch (e) {
+          // degrade — synthesise un-adjudicated findings.
+          console.warn(
+            `[run-brief] challenge-findings failed, using un-adjudicated findings: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+          adjudicated = rawFindings;
         }
         const verdicts = { confirmed: 0, disputed: 0, unverified: 0 };
         for (const f of adjudicated) {
