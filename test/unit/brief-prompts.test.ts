@@ -28,7 +28,7 @@ describe('brief-prompts', () => {
     expect(p.system).toContain('confirmed');
     expect(p.user).toContain('X shipped');
   });
-  it('synthesis prompt embeds persona, guardrails and section names', () => {
+  it('synthesis prompt embeds persona, guardrails, section names, summary + linked sources', () => {
     const p = buildSynthesisPrompt({
       briefDescription: 'T brief', since: 's', until: 'u', findings: [finding],
       persona: { voice: 'Direct.', audience: 'An engineer.', avoid: ['Hype'] },
@@ -40,5 +40,10 @@ describe('brief-prompts', () => {
     expect(p.system).toContain('Hype');
     expect(p.system).toContain('Label items GA/BETA/ROADMAP/RUMOUR.');
     expect(p.system).toContain('headline');
+    // Content polish: an executive-summary section is requested up front.
+    expect(p.system).toContain('## Bottom line');
+    // Content polish: sources are clickable markdown links, not plain text.
+    expect(p.system.toLowerCase()).toContain('markdown link');
+    expect(p.system).toContain('[Title](URL)');
   });
 });
