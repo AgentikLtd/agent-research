@@ -80,3 +80,25 @@ describe('createGatewayClient', () => {
     }
   });
 });
+
+import type { LlmServerTool } from '../../src/contracts.js';
+
+describe('gateway-client — server tools', () => {
+  it('forwards a web_search server tool in the request body', async () => {
+    let body: unknown;
+    const fakeFetch: typeof fetch = async (_u, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        ok: true, response: { id: 'r', content: [{ type: 'text', text: 'x' }], usage: { inputTokens: 1, outputTokens: 1 } },
+      }), { status: 200 });
+    };
+    const client = createGatewayClient({ hubUrl: 'https://hub', token: 't', fetcher: fakeFetch });
+    const ws: LlmServerTool = { kind: 'server', tool: 'web_search', maxResults: 6 };
+    await client.send({
+      model: 'google/gemini-3.5-flash',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      tools: [ws], params: { maxOutputTokens: 100 },
+    });
+    expect((body as { tools?: unknown[] }).tools).toEqual([ws]);
+  });
+});

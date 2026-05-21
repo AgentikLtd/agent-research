@@ -24,7 +24,7 @@ import type {
   LlmCost,
   LlmGenerationParams,
   LlmMessage,
-  LlmTool,
+  LlmRequestTool,
   LlmUsage,
 } from '../contracts.js';
 
@@ -32,7 +32,7 @@ export interface LlmSendRequest {
   readonly model: string;
   readonly messages: ReadonlyArray<LlmMessage>;
   readonly system?: string;
-  readonly tools?: ReadonlyArray<LlmTool>;
+  readonly tools?: ReadonlyArray<LlmRequestTool>;
   readonly params: LlmGenerationParams;
 }
 

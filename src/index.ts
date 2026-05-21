@@ -13,9 +13,8 @@
  *      lives in `src/sandbox-check/`; the research-agent template defers that
  *      to a future hardening pass and uses the lighter health probe per the
  *      Phase 6 plan.)
- *   4. Load `manifest.yaml` once at boot; resolve the default model from
- *      `x-agentik/model.per_skill_overrides['compose-brief']` (preferred —
- *      compose-brief is the only LLM call in the run-brief flow) or
+ *   4. Load `manifest.yaml` once at boot; resolve per-skill models from
+ *      `x-agentik/model.per_skill_overrides[skill]` (preferred) or
  *      `x-agentik/model.default` (manifest fallback) or the hardcoded
  *      `anthropic/claude-sonnet-4-6` fallback.
  *   5. Construct the 5 clients (gateway, profile, storage, audit, channel).
@@ -28,8 +27,10 @@
  *      `subreddit` aliases to the reddit adapter. `community`, `docs`,
  *      `vendor`, `news` all use the html adapter — they are HTML listing
  *      pages in disguise. Future flavours add adapters here.
- *   7. Register all 4 skills with the registry. Order matters only in that
+ *   7. Register all skills with the registry. Order matters only in that
  *      `run-brief` references the registry; the others are independent.
+ *      gather-sources remains registered (independently invokable) but is
+ *      no longer in the run-brief pipeline path.
  *   8. Boot an HTTP server on `env.PORT`:
  *        - `GET /health`  → `{ ok: true, agent, version }` (no auth).
  *        - `POST /a2a` → bearer-validate against `env.HUB_AGENT_TOKEN`,
@@ -59,14 +60,17 @@ import { createRedditSourceAdapter } from './sources/reddit-source.js';
 import { createHtmlSourceAdapter } from './sources/html-source.js';
 import { createSkillRegistry, UnknownSkillError } from './skills/registry.js';
 import { createGatherSourcesSkill } from './skills/gather-sources.js';
-import { createComposeBriefSkill } from './skills/compose-brief.js';
+import { createPlanResearchSkill } from './skills/plan-research.js';
+import { createResearchAngleSkill } from './skills/research-angle.js';
+import { createChallengeFindingsSkill } from './skills/challenge-findings.js';
+import { createSynthesizeBriefSkill } from './skills/synthesize-brief.js';
 import { createDispatchBriefSkill } from './skills/dispatch-brief.js';
 import { createRunBriefSkill } from './skills/run-brief.js';
 import type { SourceAdapter } from './sources/contracts.js';
 import type { SkillRegistry } from './skills/registry.js';
 
 const FALLBACK_MODEL = 'anthropic/claude-sonnet-4-6';
-const AGENT_VERSION = '0.1.2';
+const AGENT_VERSION = '0.2.1';
 
 /** JSON-RPC error codes. */
 const JSONRPC_PARSE_ERROR = -32700;
@@ -97,25 +101,12 @@ function readManifest(path = 'manifest.yaml'): AgentManifest {
   return parseYaml(text) as AgentManifest;
 }
 
-/**
- * Resolve the default model wired into run-brief / compose-brief. Order:
- *   1. `x-agentik/model.per_skill_overrides['compose-brief']` — compose-brief
- *      is the only LLM call in the brief pipeline; an override here is the
- *      manifest author's explicit "use the better model for the brief" signal.
- *   2. `x-agentik/model.default` — fallback if no per-skill override.
- *   3. Hardcoded `anthropic/claude-sonnet-4-6` — last resort if the manifest
- *      is malformed; preserves bootability over correctness so health probes
- *      still pass and the issue surfaces in audit logs.
- */
-export function resolveDefaultModel(manifest: AgentManifest): string {
+/** Resolve a skill's model: per_skill_overrides[skill] → model.default → fallback. */
+export function resolveSkillModel(manifest: AgentManifest, skill: string): string {
   const model = manifest['x-agentik/model'];
-  if (model) {
-    const override = model.per_skill_overrides?.['compose-brief'];
-    if (typeof override === 'string' && override.length > 0) return override;
-    if (typeof model.default === 'string' && model.default.length > 0) {
-      return model.default;
-    }
-  }
+  const override = model?.per_skill_overrides?.[skill];
+  if (typeof override === 'string' && override.length > 0) return override;
+  if (typeof model?.default === 'string' && model.default.length > 0) return model.default;
   return FALLBACK_MODEL;
 }
 
@@ -287,7 +278,6 @@ async function main(): Promise<void> {
   }
 
   const manifest = readManifest();
-  const modelDefault = resolveDefaultModel(manifest);
 
   // --- clients (Phase 4) ---
   const gateway = createGatewayClient({
@@ -336,12 +326,31 @@ async function main(): Promise<void> {
     news: htmlAdapter,
   };
 
-  // --- skills (Phase 5) ---
+  // --- skills ---
+  // gather-sources is retained (independently invokable) but is no longer
+  // in the run-brief pipeline path — the four-stage pipeline handles research.
   const registry = createSkillRegistry();
   registry.register(createGatherSourcesSkill({ adapters }));
-  registry.register(createComposeBriefSkill({ gateway }));
+  registry.register(
+    createPlanResearchSkill({ gateway, model: resolveSkillModel(manifest, 'plan-research') }),
+  );
+  registry.register(
+    createResearchAngleSkill({ gateway, model: resolveSkillModel(manifest, 'research-angle') }),
+  );
+  registry.register(
+    createChallengeFindingsSkill({
+      gateway,
+      model: resolveSkillModel(manifest, 'challenge-findings'),
+    }),
+  );
+  registry.register(
+    createSynthesizeBriefSkill({
+      gateway,
+      model: resolveSkillModel(manifest, 'synthesize-brief'),
+    }),
+  );
   registry.register(createDispatchBriefSkill({ profile, storage, channel, audit }));
-  registry.register(createRunBriefSkill({ registry, profile, audit, modelDefault }));
+  registry.register(createRunBriefSkill({ registry, profile, audit }));
 
   const server = createServer((req, res) => {
     void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME).catch(
@@ -358,7 +367,7 @@ async function main(): Promise<void> {
   const port = env.PORT;
   server.listen(port, () => {
     console.log(
-      `[${env.AGENT_NAME}] listening on :${String(port)} (model=${modelDefault})`,
+      `[${env.AGENT_NAME}] listening on :${String(port)} v${AGENT_VERSION}`,
     );
   });
 
