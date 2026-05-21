@@ -28,7 +28,25 @@ describe('parseAngles', () => {
   it('parses a JSON array of strings', () => {
     expect(parseAngles('```json\n["a","b"]\n```')).toEqual(['a', 'b']);
   });
-  it('throws on a non-array', () => {
+  it('throws on an object with no angle array', () => {
     expect(() => parseAngles('{"a":1}')).toThrow(FindingsParseError);
+  });
+  it('parses prose-wrapped output with a fenced array', () => {
+    const text =
+      'Here is the research plan:\n```json\n["one","two","three"]\n```\nThat covers it.';
+    expect(parseAngles(text)).toEqual(['one', 'two', 'three']);
+  });
+  it('unwraps an object that nests the angle array under a key', () => {
+    expect(parseAngles('{"angles":[{"q":"a"},{"q":"b"}]}')).toEqual(['a', 'b']);
+  });
+  it('extracts angle text from an array of objects', () => {
+    const text = '[{"angle":"first"},{"question":"second"},{"text":"third"}]';
+    expect(parseAngles(text)).toEqual(['first', 'second', 'third']);
+  });
+  it('tolerates a trailing comma in the array', () => {
+    expect(parseAngles('["a","b","c",]')).toEqual(['a', 'b', 'c']);
+  });
+  it('throws when no angles can be extracted', () => {
+    expect(() => parseAngles('[]')).toThrow(FindingsParseError);
   });
 });

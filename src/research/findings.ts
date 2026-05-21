@@ -99,18 +99,62 @@ export function parseFindings(text: string): Finding[] {
   return result.data as Finding[];
 }
 
+/**
+ * Coerce a parsed JSON value into a flat array of angle strings. Models
+ * deviate from "a JSON array of strings" in predictable ways — an array of
+ * objects (`[{"angle":"…"}]`), an object nesting the array under a key, or a
+ * single string — and `parseAngles` tolerates all of them.
+ */
+function coerceToAngleArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item): string => {
+        if (typeof item === 'string') return item;
+        if (item !== null && typeof item === 'object') {
+          const o = item as Record<string, unknown>;
+          for (const key of ['angle', 'question', 'text', 'q', 'title']) {
+            const v = o[key];
+            if (typeof v === 'string') return v;
+          }
+          const firstString = Object.values(o).find((v) => typeof v === 'string');
+          if (typeof firstString === 'string') return firstString;
+        }
+        return '';
+      })
+      .filter((s) => s.trim().length > 0);
+  }
+  if (typeof raw === 'string') {
+    return raw.trim().length > 0 ? [raw] : [];
+  }
+  if (raw !== null && typeof raw === 'object') {
+    const arrays = Object.values(raw as Record<string, unknown>).filter(Array.isArray);
+    if (arrays.length === 1) return coerceToAngleArray(arrays[0]);
+  }
+  return [];
+}
+
 export function parseAngles(text: string): string[] {
+  const json = extractJson(text);
   let raw: unknown;
   try {
-    raw = JSON.parse(extractJson(text));
-  } catch (e) {
-    throw new FindingsParseError(
-      `angles JSON did not parse: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    raw = JSON.parse(json);
+  } catch {
+    // Retry tolerating trailing commas — a common model JSON deviation.
+    try {
+      raw = JSON.parse(json.replace(/,(\s*[}\]])/g, '$1'));
+    } catch (e) {
+      throw new FindingsParseError(
+        `angles JSON did not parse: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
-  const result = AnglesArraySchema.safeParse(raw);
+  const angles = coerceToAngleArray(raw);
+  const result = AnglesArraySchema.safeParse(angles);
   if (!result.success) {
     throw new FindingsParseError(`angles failed validation: ${result.error.message}`);
+  }
+  if (result.data.length === 0) {
+    throw new FindingsParseError('no research angles found in plan response');
   }
   return result.data;
 }
