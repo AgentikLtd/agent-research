@@ -1,0 +1,4 @@
+{
+  "$comment": "WS33 audit gate 6 — pnpm audit --prod --audit-level=high allow-list. Empty baseline at WS33 landing. Add entries with structured { advisoryId, package, severity, reason, expires, owner }. Default expiry: 90 days for High, 30 for Critical.",
+  "advisories": []
+}
