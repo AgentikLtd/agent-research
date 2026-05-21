@@ -11,7 +11,10 @@ import { type Finding, parseFindings } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
 const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
-const DEFAULT_MAX_OUTPUT_TOKENS = 6000;
+// 16000: a verbose angle's Finding[] JSON exceeded the old 6000 cap and was
+// truncated mid-structure, failing parseFindings. Findings are also bounded
+// to <=8 in the prompt; 16000 leaves ample headroom.
+const DEFAULT_MAX_OUTPUT_TOKENS = 16000;
 
 export interface ResearchAngleArgs {
   readonly angle: string;

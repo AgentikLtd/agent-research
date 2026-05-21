@@ -12,7 +12,9 @@ import { type Finding, parseFindings } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
 const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
-const DEFAULT_MAX_OUTPUT_TOKENS = 8000;
+// 24000: the verifier re-emits every finding adjudicated; over ~30 findings
+// the old 8000 cap truncated the JSON, so every run degraded to unverified.
+const DEFAULT_MAX_OUTPUT_TOKENS = 24000;
 
 export interface ChallengeFindingsArgs {
   readonly findings: readonly Finding[];

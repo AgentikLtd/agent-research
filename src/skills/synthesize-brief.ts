@@ -13,7 +13,7 @@ import {
 import type { Finding } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 8000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 12000;
 const CITATION_REGEX = /\[(\d+)\]/g;
 
 export interface SynthesizeBriefArgs {

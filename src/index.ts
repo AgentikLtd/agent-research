@@ -70,7 +70,7 @@ import type { SourceAdapter } from './sources/contracts.js';
 import type { SkillRegistry } from './skills/registry.js';
 
 const FALLBACK_MODEL = 'anthropic/claude-sonnet-4-6';
-const AGENT_VERSION = '0.2.0';
+const AGENT_VERSION = '0.2.1';
 
 /** JSON-RPC error codes. */
 const JSONRPC_PARSE_ERROR = -32700;
