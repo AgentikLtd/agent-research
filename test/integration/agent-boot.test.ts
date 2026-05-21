@@ -2,8 +2,8 @@
  * Integration test — boots the HTTP server with a minimal SkillRegistry
  * carrying a single `echo` skill, then exercises:
  *   - GET /health → 200 with the expected JSON shape.
- *   - POST /jsonrpc without auth → 401, no skill invocation.
- *   - POST /jsonrpc with auth + valid body → 200, skill invocation occurred.
+ *   - POST /a2a without auth → 401, no skill invocation.
+ *   - POST /a2a with auth + valid body → 200, skill invocation occurred.
  *
  * The HTTP-server wiring in `src/index.ts` is exercised via
  * `handleJsonRpc` (the pure JSON-RPC dispatcher) for the JSON-RPC paths,
@@ -67,7 +67,7 @@ function buildServer(registry: SkillRegistry): import('node:http').Server {
         res.end(JSON.stringify({ ok: true, agent: AGENT_NAME, version: AGENT_VERSION }));
         return;
       }
-      if (req.method === 'POST' && url === '/jsonrpc') {
+      if (req.method === 'POST' && url === '/a2a') {
         const body = await readBody(req);
         const authHeader = req.headers['authorization'];
         const result = await handleJsonRpc(
@@ -141,8 +141,8 @@ describe('agent boot — HTTP + JSON-RPC + bearer guard', () => {
     expect(body.version).toBe(AGENT_VERSION);
   });
 
-  it('POST /jsonrpc without auth returns 401 and does NOT invoke the skill', async () => {
-    const res = await fetch(`${baseUrl}/jsonrpc`, {
+  it('POST /a2a without auth returns 401 and does NOT invoke the skill', async () => {
+    const res = await fetch(`${baseUrl}/a2a`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -158,8 +158,8 @@ describe('agent boot — HTTP + JSON-RPC + bearer guard', () => {
     expect(state.invocations).toBe(0);
   });
 
-  it('POST /jsonrpc with wrong bearer returns 401', async () => {
-    const res = await fetch(`${baseUrl}/jsonrpc`, {
+  it('POST /a2a with wrong bearer returns 401', async () => {
+    const res = await fetch(`${baseUrl}/a2a`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -176,8 +176,8 @@ describe('agent boot — HTTP + JSON-RPC + bearer guard', () => {
     expect(state.invocations).toBe(0);
   });
 
-  it('POST /jsonrpc with valid auth + body invokes the skill and returns the result', async () => {
-    const res = await fetch(`${baseUrl}/jsonrpc`, {
+  it('POST /a2a with valid auth + body invokes the skill and returns the result', async () => {
+    const res = await fetch(`${baseUrl}/a2a`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -202,8 +202,8 @@ describe('agent boot — HTTP + JSON-RPC + bearer guard', () => {
     expect(state.invocations).toBe(1);
   });
 
-  it('POST /jsonrpc with unknown skill returns -32001 error envelope', async () => {
-    const res = await fetch(`${baseUrl}/jsonrpc`, {
+  it('POST /a2a with unknown skill returns -32001 error envelope', async () => {
+    const res = await fetch(`${baseUrl}/a2a`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -223,8 +223,8 @@ describe('agent boot — HTTP + JSON-RPC + bearer guard', () => {
     expect(state.invocations).toBe(0);
   });
 
-  it('POST /jsonrpc with unknown method returns -32601', async () => {
-    const res = await fetch(`${baseUrl}/jsonrpc`, {
+  it('POST /a2a with unknown method returns -32601', async () => {
+    const res = await fetch(`${baseUrl}/a2a`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -241,8 +241,8 @@ describe('agent boot — HTTP + JSON-RPC + bearer guard', () => {
     expect(body.error.code).toBe(-32601);
   });
 
-  it('POST /jsonrpc with non-JSON body returns -32700 parse error', async () => {
-    const res = await fetch(`${baseUrl}/jsonrpc`, {
+  it('POST /a2a with non-JSON body returns -32700 parse error', async () => {
+    const res = await fetch(`${baseUrl}/a2a`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

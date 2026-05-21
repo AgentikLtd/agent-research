@@ -32,7 +32,7 @@
  *      `run-brief` references the registry; the others are independent.
  *   8. Boot an HTTP server on `env.PORT`:
  *        - `GET /health`  → `{ ok: true, agent, version }` (no auth).
- *        - `POST /jsonrpc` → bearer-validate against `env.HUB_AGENT_TOKEN`,
+ *        - `POST /a2a` → bearer-validate against `env.HUB_AGENT_TOKEN`,
  *          accept `{ jsonrpc: '2.0', id, method: 'skills.invoke',
  *          params: { skill, args } }`, dispatch through the registry, return
  *          a JSON-RPC envelope.
@@ -66,7 +66,7 @@ import type { SourceAdapter } from './sources/contracts.js';
 import type { SkillRegistry } from './skills/registry.js';
 
 const FALLBACK_MODEL = 'anthropic/claude-sonnet-4-6';
-const AGENT_VERSION = '0.1.0';
+const AGENT_VERSION = '0.1.2';
 
 /** JSON-RPC error codes. */
 const JSONRPC_PARSE_ERROR = -32700;
@@ -399,7 +399,7 @@ async function handleRequest(
     return;
   }
 
-  if (req.method === 'POST' && url === '/jsonrpc') {
+  if (req.method === 'POST' && url === '/a2a') {
     const body = await readBody(req);
     const authHeader = req.headers['authorization'];
     const result = await handleJsonRpc(

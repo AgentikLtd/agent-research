@@ -13,14 +13,14 @@ agent:
   vendor: AgentikLtd
   homepage: https://github.com/AgentikLtd/agent-research
   endpoints:
-    jsonrpc: http://localhost:4003/jsonrpc
+    a2a: http://localhost:4003/a2a
     health: http://localhost:4003/health
   capabilities: [skills.invoke, schedule.fire]
   skills: [run-brief, gather-sources, compose-brief, dispatch-brief]
   authentication: { type: bearer }
 
 x-agentik/runtime:
-  container_image: ghcr.io/agentikltd/agent-research:0.1.0
+  container_image: ghcr.io/agentikltd/agent-research:0.1.2
   resources: { cpu: shared-1x, memory_mb: 512 }
   required_secrets: []                  # No per-agent OAuth or API keys. Reddit JSON is public; vendor pages public.
   required_external_services:
@@ -130,7 +130,7 @@ x-agentik/defaults:
         - { id: beyond-cx,        label: 'Genesys Beyond Community — Genesys Cloud CX', url: 'https://orchestrators.genesys.com/community?product=genesys-cloud-cx', type: community, focus: 'Practitioner discussion, real-world implementation issues, feature requests', credibility: medium }
         - { id: beyond-home,      label: 'Genesys Beyond — Home',                      url: 'https://orchestrators.genesys.com/home',                                  type: community, focus: 'Community announcements, partner-led webinars',                       credibility: medium }
         - { id: help-admin,       label: 'Genesys Cloud Administrator Help',           url: 'https://help.genesys.cloud/administrators/',                              type: docs,      focus: 'Authoritative source for GA features and release notes',              credibility: high }
-        - { id: reddit-callcentres, label: 'r/callcentres',                              url: 'https://www.reddit.com/r/callcentres/',                                   type: subreddit, focus: 'Operator-side perspective; sentiment on Genesys vs alternatives',     credibility: low }
+        - { id: reddit-callcentres, label: 'r/callcentres',                              url: 'callcentres',                                                             type: subreddit, focus: 'Operator-side perspective; sentiment on Genesys vs alternatives',     credibility: low }
         - { id: vendor-newsroom,  label: 'Genesys Newsroom (UK)',                      url: 'https://www.genesys.com/en-gb/company/newsroom',                          type: vendor,    focus: 'Official vendor announcements',                                          credibility: medium }
         - { id: cxtoday-genesys,  label: 'CX Today — Genesys vendor page',             url: 'https://www.cxtoday.com/vendor/genesys/',                                 type: news,      focus: 'Industry coverage of Genesys',                                           credibility: medium }
       output:

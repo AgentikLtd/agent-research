@@ -100,6 +100,18 @@ describe('createRedditSource', () => {
     expect(seenUrl).not.toContain('/r/r%2Ftypescript/');
   });
 
+  it('normalises a full reddit URL down to the bare subreddit name', async () => {
+    let seenUrl = '';
+    const fetcher: typeof fetch = async (input) => {
+      seenUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      return new Response(JSON.stringify(SAMPLE), { status: 200 });
+    };
+    const source = createRedditSource({ fetcher });
+    await source.fetchSubreddit('https://www.reddit.com/r/callcentres/');
+    expect(seenUrl).toContain('/r/callcentres/top.json');
+    expect(seenUrl).not.toContain('reddit.com%2F');
+  });
+
   it('returns [] for empty subreddit input', async () => {
     const source = createRedditSource();
     const items = await source.fetchSubreddit('');
