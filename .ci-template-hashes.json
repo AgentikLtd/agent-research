@@ -1,0 +1,11 @@
+{
+  "$comment": "WS33 audit gate 8 — CI template byte-parity hashes. The security job is vendored byte-identically across repos. When a template is intentionally updated, run `node scripts/validate-ci-templates.mjs --update` and commit the new hashes in the same PR.",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "8b8f9ae08813c2d035f09059394a1c7aeddecb3a28968080167d8fb652a8a16b",
+      "securityJobOnly": true,
+      "purpose": "gitleaks-action dual-fix security job (permissions + fetch-depth) — cookbook/first-pr-ci-debut"
+    }
+  ]
+}
