@@ -50,6 +50,9 @@ const FINDING_SCHEMA_TEXT = [
   '  "flags": string[],         // e.g. "vendor-marketing","single-source","conflicting"',
   '  "publishedAt"?: string     // ISO date of the underlying item',
   '}',
+  '',
+  'Return at most 8 findings — the most significant ones only. Keep each "detail" to 2-4 sentences so the whole array stays compact.',
+  'Your entire response must be the JSON array itself — no preamble, no commentary, no trailing notes.',
 ].join('\n');
 
 function escapeXml(s: string): string {
