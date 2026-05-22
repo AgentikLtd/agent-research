@@ -45,14 +45,14 @@ describe('createResearchAngleSkill', () => {
     expect(calls[0]?.params.maxOutputTokens).toBeGreaterThanOrEqual(24000);
   });
 
-  it('defaults web_search to 10 results when none is configured', async () => {
+  it('defaults web_search to 6 results when none is configured', async () => {
     const { client, calls } = fakeGateway({
       ok: true, content: [{ type: 'text', text: findingJson }],
       usage: { inputTokens: 1, outputTokens: 1 },
     });
     const skill = createResearchAngleSkill({ gateway: client, model: 'm' });
     await skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' });
-    expect(calls[0]?.tools).toEqual([{ kind: 'server', tool: 'web_search', maxResults: 10 }]);
+    expect(calls[0]?.tools).toEqual([{ kind: 'server', tool: 'web_search', maxResults: 6 }]);
   });
 
   it('passes communityDigest through into the research prompt user block', async () => {

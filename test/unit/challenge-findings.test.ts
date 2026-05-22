@@ -27,13 +27,13 @@ describe('createChallengeFindingsSkill', () => {
     expect(calls[0]?.messages[0]?.content[0]).toMatchObject({ type: 'text' });
   });
 
-  it('defaults web_search to 10 results when none is configured', async () => {
+  it('defaults web_search to 6 results when none is configured', async () => {
     const { client, calls } = fakeGateway({
       ok: true, content: [{ type: 'text', text: adjudicated }],
       usage: { inputTokens: 1, outputTokens: 1 },
     });
     const skill = createChallengeFindingsSkill({ gateway: client, model: 'm' });
     await skill.invoke({ findings: [raw], topic: 'T', since: 's', until: 'u' });
-    expect(calls[0]?.tools?.[0]).toMatchObject({ tool: 'web_search', maxResults: 10 });
+    expect(calls[0]?.tools?.[0]).toMatchObject({ tool: 'web_search', maxResults: 6 });
   });
 });

@@ -11,9 +11,10 @@ import { buildChallengePrompt } from '../prompts/brief-prompts.js';
 import { type Finding, parseFindings } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
-// 10: kept symmetric with research-angle — widens what the verifier reads per
-// search without enlarging its adjudicated-JSON output. (Spec WA3.)
-const DEFAULT_WEB_SEARCH_MAX_RESULTS = 10;
+// 6: kept symmetric with research-angle — 10 (briefly tried, Spec WA3) let the
+// agentic search loop spend the output-token budget before the JSON was
+// emitted. Reverted to the proven 6.
+const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
 // 24000: the verifier re-emits every finding adjudicated; over ~30 findings
 // the old 8000 cap truncated the JSON, so every run degraded to unverified.
 const DEFAULT_MAX_OUTPUT_TOKENS = 24000;
