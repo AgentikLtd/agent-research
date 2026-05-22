@@ -40,7 +40,7 @@ export interface ResearchAngleResult {
 export interface ResearchAngleDeps {
   readonly gateway: GatewayClient;
   readonly model: string;
-  /** Web results pulled per search; falls back to 6. */
+  /** Web results pulled per search; falls back to 10. */
   readonly webSearchMaxResults?: number;
 }
 
