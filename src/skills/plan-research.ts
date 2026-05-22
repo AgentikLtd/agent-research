@@ -10,6 +10,15 @@ import { parseAngles } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
 const DEFAULT_MAX_ANGLES = 4;
+/**
+ * The plan stage emits a tiny payload (a handful of angle strings), but a
+ * thinking model — e.g. Gemini 3.5 Flash — spends reasoning tokens against
+ * this same budget. The original 1000-token cap left no headroom: reasoning
+ * consumed it and the visible angles JSON truncated mid-string. 8000 clears a
+ * flash model's reasoning overhead; the sibling stages (research/challenge/
+ * synthesize) already budget 12k–24k for the identical reason.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 8000;
 
 export interface PlanResearchArgs {
   readonly topic: string;
@@ -63,7 +72,7 @@ export function createPlanResearchSkill(
         model: args.model ?? deps.model,
         system: prompt.system,
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
-        params: { maxOutputTokens: 1000 },
+        params: { maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS },
       });
       if (!result.ok) {
         throw new PlanResearchError(`plan-research gateway failure: ${result.error.message}`);

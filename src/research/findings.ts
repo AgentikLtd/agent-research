@@ -133,21 +133,75 @@ function coerceToAngleArray(raw: unknown): string[] {
   return [];
 }
 
-export function parseAngles(text: string): string[] {
+/**
+ * Recover the complete leading elements of a truncated JSON array. A thinking
+ * model can exhaust its output-token budget mid-array, leaving the final
+ * element unterminated (`Unterminated string in JSON …`). This walks the text
+ * tracking string/escape/nesting state and returns everything up to the last
+ * top-level comma, re-closed with `]` — dropping the incomplete tail element.
+ * Returns null when no complete element precedes the truncation.
+ */
+function salvageTruncatedArray(json: string): string | null {
+  const start = json.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let lastTopLevelComma = -1;
+  for (let i = start; i < json.length; i += 1) {
+    const ch = json[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '[' || ch === '{') depth += 1;
+    else if (ch === ']' || ch === '}') depth -= 1;
+    else if (ch === ',' && depth === 1) lastTopLevelComma = i;
+  }
+  if (lastTopLevelComma === -1) return null;
+  return `${json.slice(start, lastTopLevelComma)}]`;
+}
+
+/**
+ * Parse the angle-plan JSON, tolerating the two deviations real models
+ * produce: a trailing comma, and — for thinking models that run out of output
+ * budget mid-response — a truncated, unterminated array.
+ */
+function parseAnglesJson(text: string): unknown {
   const json = extractJson(text);
-  let raw: unknown;
   try {
-    raw = JSON.parse(json);
-  } catch {
+    return JSON.parse(json);
+  } catch (firstError) {
     // Retry tolerating trailing commas — a common model JSON deviation.
     try {
-      raw = JSON.parse(json.replace(/,(\s*[}\]])/g, '$1'));
-    } catch (e) {
+      return JSON.parse(json.replace(/,(\s*[}\]])/g, '$1'));
+    } catch {
+      // Last resort: salvage the complete leading elements of a truncated
+      // array rather than losing the whole research plan to one cut-off angle.
+      // Salvage scans the ORIGINAL text — extractJson can mis-slice a truncated
+      // array (an unclosed `[…` of objects falls into its `{…}` branch).
+      const salvaged = salvageTruncatedArray(text);
+      if (salvaged !== null) {
+        try {
+          return JSON.parse(salvaged);
+        } catch {
+          /* fall through to the typed error */
+        }
+      }
       throw new FindingsParseError(
-        `angles JSON did not parse: ${e instanceof Error ? e.message : String(e)}`,
+        `angles JSON did not parse: ${
+          firstError instanceof Error ? firstError.message : String(firstError)
+        }`,
       );
     }
   }
+}
+
+export function parseAngles(text: string): string[] {
+  const raw = parseAnglesJson(text);
   const angles = coerceToAngleArray(raw);
   const result = AnglesArraySchema.safeParse(angles);
   if (!result.success) {
