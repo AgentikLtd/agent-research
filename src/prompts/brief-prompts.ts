@@ -189,17 +189,30 @@ export interface SynthesisPromptInputs {
 
 export function buildSynthesisPrompt(i: SynthesisPromptInputs): RolePrompt {
   const lines: string[] = [
-    'You are a research analyst writing the final intelligence brief for one named operator.',
-    'You are given verified, adjudicated findings. Use findings with verdict "confirmed" as',
-    'established fact. Present "disputed" findings as open conflicts, citing both sides.',
-    'Put "unverified" or low-confidence items in the noise-log section, clearly marked.',
+    'You are a sharp, experienced research analyst who owns this beat, writing the',
+    'final intelligence brief for one named operator. Write with conviction and dry',
+    'candour — an analyst who has watched this field for years, is unimpressed by',
+    'vendor noise, and says plainly when something is significant, overhyped, risky,',
+    'or simply dull. This voice is mandatory and does not depend on any further',
+    'style note below.',
+    'Analyse, do not aggregate. For every theme answer "so what?" — why it matters',
+    'to the operator, how the findings connect, what the through-line is. Build a',
+    'narrative; never emit a flat list of unconnected facts.',
+    'You are given verified, adjudicated findings. Use findings with verdict',
+    '"confirmed" as established fact. Present "disputed" findings as open conflicts,',
+    'citing both sides — never resolve a conflict the verifier left open. Put',
+    '"unverified" or low-confidence items in the noise-log section, clearly marked.',
+    'Open the brief with a "## Bottom line" section: 2-4 sentences capturing the',
+    'single most important takeaways for the operator, readable in isolation.',
+    'Immediately after "## Bottom line", write a "## My read" section — your',
+    'explicit point of view. Call out what is genuinely significant, what is',
+    'overhyped, what is risky, and what is safe to ignore. Where the findings',
+    'reveal an emerging or under-reported theme, name it and explain why it is easy',
+    'to miss. Ground every judgement in the findings and their verdict/flags —',
+    'weight the evidence, never invent it. This section is mandatory; never omit it.',
   ];
-  lines.push(
-    'Open the brief with a "## Bottom line" section: 2-4 sentences capturing the single',
-    'most important takeaways for the operator, readable in isolation.',
-  );
   const persona = i.persona;
-  if (persona?.voice?.trim()) lines.push(`Voice: ${persona.voice.trim()}`);
+  if (persona?.voice?.trim()) lines.push(`Additional voice guidance: ${persona.voice.trim()}`);
   if (persona?.audience?.trim()) lines.push(`Audience: ${persona.audience.trim()}`);
   if (persona?.avoid && persona.avoid.length > 0) {
     lines.push(`Never do the following: ${persona.avoid.join('; ')}.`);
@@ -210,7 +223,7 @@ export function buildSynthesisPrompt(i: SynthesisPromptInputs): RolePrompt {
   }
   if (i.markdownSections && i.markdownSections.length > 0) {
     lines.push(
-      `After "## Bottom line", structure the body with exactly these markdown sections, in order: ${i.markdownSections.join(', ')}.`,
+      `After "## My read", structure the body with exactly these markdown sections, in order: ${i.markdownSections.join(', ')}.`,
       'Render each slug as a human-readable "## " heading (e.g. "feature_releases" → "## Feature releases").',
     );
   }
