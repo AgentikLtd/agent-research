@@ -49,4 +49,27 @@ describe('parseAngles', () => {
   it('throws when no angles can be extracted', () => {
     expect(() => parseAngles('[]')).toThrow(FindingsParseError);
   });
+  it('salvages complete angles from an array truncated mid-string', () => {
+    // A thinking model can exhaust its output-token budget mid-array, leaving
+    // the final string unterminated. The complete angles before it must survive.
+    const truncated =
+      '["first complete angle","second complete angle","third angle cut off mid-sen';
+    expect(parseAngles(truncated)).toEqual([
+      'first complete angle',
+      'second complete angle',
+    ]);
+  });
+  it('salvages angles from a truncated unclosed fenced block', () => {
+    expect(parseAngles('```json\n["alpha","beta","gamma is incompl')).toEqual([
+      'alpha',
+      'beta',
+    ]);
+  });
+  it('salvages complete objects from a truncated array of objects', () => {
+    const truncated = '[{"angle":"one"},{"angle":"two"},{"angle":"thr';
+    expect(parseAngles(truncated)).toEqual(['one', 'two']);
+  });
+  it('throws when the array truncates before the first angle completes', () => {
+    expect(() => parseAngles('["only angle cut off mid')).toThrow(FindingsParseError);
+  });
 });
