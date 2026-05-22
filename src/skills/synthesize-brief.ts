@@ -13,7 +13,15 @@ import {
 import type { Finding } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 12000;
+/**
+ * The brief is the pipeline's longest single artifact, and a thinking model
+ * (e.g. Gemini 3.5 Flash) spends reasoning tokens against this same budget.
+ * The original 12000 truncated the brief mid-document (`finish_reason: length`)
+ * — the visible markdown was cut off, dropping later sections and the Sources
+ * list, which collapsed the citation count. 32000 clears a flash model's
+ * reasoning overhead plus a long, fully-cited brief.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 32000;
 const CITATION_REGEX = /\[(\d+)\]/g;
 
 export interface SynthesizeBriefArgs {
