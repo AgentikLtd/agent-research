@@ -32,6 +32,20 @@ describe('brief-prompts', () => {
     expect(p.system).toContain('confirmed');
     expect(p.user).toContain('X shipped');
   });
+  it('synthesis prompt bakes in the candid voice + a "## My read" opinion section with no persona', () => {
+    const p = buildSynthesisPrompt({
+      briefDescription: 'T brief', since: 's', until: 'u', findings: [finding],
+    });
+    expect(p.system).toContain('## Bottom line');
+    expect(p.system).toContain('## My read');
+    const sys = p.system.toLowerCase();
+    expect(sys).toContain('candour');
+    expect(sys).toContain('analyse');
+    expect(sys).toContain('significant');
+    expect(sys).toContain('overhyped');
+    expect(sys).toContain('risky');
+    expect(sys).toContain('ignore');
+  });
   it('synthesis prompt embeds persona, guardrails, section names, summary + linked sources', () => {
     const p = buildSynthesisPrompt({
       briefDescription: 'T brief', since: 's', until: 'u', findings: [finding],
