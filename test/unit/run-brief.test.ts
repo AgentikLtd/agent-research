@@ -10,6 +10,7 @@ import type { AgentProfile, ProfileClient } from '../../src/hub/profile-client.j
 import type { AuditClient, AuditEvent } from '../../src/hub/audit-client.js';
 import type { Finding } from '../../src/research/findings.js';
 import type { GatherSourcesArgs, GatherSourcesResult } from '../../src/skills/gather-sources.js';
+import { InsufficientSourcesError } from '../../src/skills/gather-sources.js';
 
 const aFinding = (claim: string): Finding => ({
   claim, detail: 'd', label: 'GA', confidence: 'high',
@@ -237,6 +238,25 @@ describe('createRunBriefSkill', () => {
     expect(captures.research[0]?.communityDigest).toBeUndefined();
     const ev = audit.events.find((e) => e.eventType === 'sources.gathered');
     expect(ev?.payload).toMatchObject({ degraded: true });
+  });
+
+  it('Stage 0 degrade reports the real failed-source count from InsufficientSourcesError', async () => {
+    const registry = wireRegistry({
+      gather: {
+        name: 'gather-sources',
+        async invoke(): Promise<GatherSourcesResult> {
+          throw new InsufficientSourcesError(3, 4, 0.75);
+        },
+      },
+    });
+    const audit = recordingAudit();
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(baseProfile), audit: audit.client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    await skill.invoke({});
+    const ev = audit.events.find((e) => e.eventType === 'sources.gathered');
+    expect(ev?.payload).toMatchObject({ degraded: true, sourceErrors: 3 });
   });
 
   it('returns the brief markdown only when returnMarkdown is set', async () => {
