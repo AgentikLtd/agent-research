@@ -77,22 +77,41 @@ export function createResearchAngleSkill(
         tool: 'web_search',
         maxResults: deps.webSearchMaxResults ?? DEFAULT_WEB_SEARCH_MAX_RESULTS,
       };
-      const result = await deps.gateway.send({
-        model: args.model ?? deps.model,
-        system: prompt.system,
-        messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
-        tools: [webSearch],
-        params: { maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS },
-      });
-      if (!result.ok) {
-        throw new ResearchAngleError(`research-angle gateway failure: ${result.error.message}`);
+      // A model intermittently narrates ("I'll search…") instead of emitting
+      // the Finding[] JSON — no prompt wording reliably prevents it. Each call
+      // is an independent roll, so retry when the output carries no parseable
+      // findings rather than failing the angle (and often the whole run).
+      const maxAttempts = 3;
+      let lastParseError: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const result = await deps.gateway.send({
+          model: args.model ?? deps.model,
+          system: prompt.system,
+          messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
+          tools: [webSearch],
+          params: { maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS },
+        });
+        if (!result.ok) {
+          throw new ResearchAngleError(`research-angle gateway failure: ${result.error.message}`);
+        }
+        try {
+          const findings = parseFindings(firstText(result.content));
+          return {
+            findings,
+            ...(result.llmCallId !== undefined ? { llmCallId: result.llmCallId } : {}),
+            ...(result.costGbp !== undefined ? { costGbp: result.costGbp } : {}),
+          };
+        } catch (e) {
+          lastParseError = e;
+          if (attempt < maxAttempts) {
+            console.warn(
+              `[research-angle] attempt ${attempt}/${maxAttempts} carried no parseable ` +
+                `findings (${e instanceof Error ? e.message : String(e)}); retrying`,
+            );
+          }
+        }
       }
-      const findings = parseFindings(firstText(result.content));
-      return {
-        findings,
-        ...(result.llmCallId !== undefined ? { llmCallId: result.llmCallId } : {}),
-        ...(result.costGbp !== undefined ? { costGbp: result.costGbp } : {}),
-      };
+      throw lastParseError ?? new ResearchAngleError('research-angle produced no findings');
     },
   };
 }

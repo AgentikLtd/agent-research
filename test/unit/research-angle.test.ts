@@ -12,6 +12,33 @@ function fakeGateway(result: LlmSendResult): { client: GatewayClient; calls: Llm
   return { calls, client: { async send(req) { calls.push(req); return result; } } };
 }
 
+/** Gateway that returns each result in turn, repeating the last once exhausted. */
+function sequenceGateway(
+  results: readonly LlmSendResult[],
+): { client: GatewayClient; calls: LlmSendRequest[] } {
+  const calls: LlmSendRequest[] = [];
+  return {
+    calls,
+    client: {
+      async send(req) {
+        calls.push(req);
+        return results[Math.min(calls.length - 1, results.length - 1)] as LlmSendResult;
+      },
+    },
+  };
+}
+
+const proseNoJson: LlmSendResult = {
+  ok: true,
+  content: [{ type: 'text', text: "I'll search for recent releases and then investigate forums." }],
+  usage: { inputTokens: 10, outputTokens: 6 },
+};
+const findingsOk: LlmSendResult = {
+  ok: true,
+  content: [{ type: 'text', text: findingJson }],
+  usage: { inputTokens: 10, outputTokens: 6 },
+};
+
 describe('createResearchAngleSkill', () => {
   it('offers the web_search tool and returns parsed findings', async () => {
     const { client, calls } = fakeGateway({
@@ -53,6 +80,25 @@ describe('createResearchAngleSkill', () => {
     const skill = createResearchAngleSkill({ gateway: client, model: 'm' });
     await skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' });
     expect(calls[0]?.tools).toEqual([{ kind: 'server', tool: 'web_search', maxResults: 6 }]);
+  });
+
+  it('retries the angle when a response carries no parseable findings, then succeeds', async () => {
+    // The confirmed flaky mode: a model intermittently narrates ("I'll search…")
+    // instead of emitting the Finding[] JSON. A fresh attempt is an independent
+    // roll, so the angle should retry rather than fail the whole run.
+    const { client, calls } = sequenceGateway([proseNoJson, findingsOk]);
+    const skill = createResearchAngleSkill({ gateway: client, model: 'm' });
+    const out = await skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' });
+    expect(out.findings).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('gives up and throws after exhausting its retries when no attempt yields findings', async () => {
+    const { client, calls } = sequenceGateway([proseNoJson]);
+    const skill = createResearchAngleSkill({ gateway: client, model: 'm' });
+    await expect(skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' }))
+      .rejects.toThrow(/did not parse/);
+    expect(calls).toHaveLength(3);
   });
 
   it('passes communityDigest through into the research prompt user block', async () => {
