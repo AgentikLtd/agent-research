@@ -54,4 +54,20 @@ describe('createResearchAngleSkill', () => {
     await skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' });
     expect(calls[0]?.tools).toEqual([{ kind: 'server', tool: 'web_search', maxResults: 10 }]);
   });
+
+  it('passes communityDigest through into the research prompt user block', async () => {
+    const { client, calls } = fakeGateway({
+      ok: true, content: [{ type: 'text', text: findingJson }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+    const skill = createResearchAngleSkill({ gateway: client, model: 'm' });
+    await skill.invoke({
+      angle: 'A', topic: 'T', since: 's', until: 'u',
+      communityDigest: '- [Seed lead](https://x.example) — r/x',
+    });
+    const part = calls[0]?.messages[0]?.content[0];
+    const userText = part?.type === 'text' ? part.text : '';
+    expect(userText).toContain('<community-digest>');
+    expect(userText).toContain('Seed lead');
+  });
 });

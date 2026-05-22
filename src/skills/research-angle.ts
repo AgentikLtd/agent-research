@@ -26,6 +26,8 @@ export interface ResearchAngleArgs {
   readonly since: string;
   readonly until: string;
   readonly prioritySources?: readonly PrioritySource[];
+  /** Stage-0 community digest, injected as seed leads into the prompt. */
+  readonly communityDigest?: string;
   readonly model?: string;
 }
 
@@ -66,6 +68,7 @@ export function createResearchAngleSkill(
         since: args.since,
         until: args.until,
         ...(args.prioritySources !== undefined ? { prioritySources: args.prioritySources } : {}),
+        ...(args.communityDigest !== undefined ? { communityDigest: args.communityDigest } : {}),
       });
       const webSearch: LlmServerTool = {
         kind: 'server',
