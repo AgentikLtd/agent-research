@@ -103,12 +103,19 @@ export function createResearchAngleSkill(
           };
         } catch (e) {
           lastParseError = e;
-          if (attempt < maxAttempts) {
-            console.warn(
-              `[research-angle] attempt ${attempt}/${maxAttempts} carried no parseable ` +
-                `findings (${e instanceof Error ? e.message : String(e)}); retrying`,
-            );
-          }
+          // Diagnostic: usage.outputTokens discriminates over-search-and-truncate
+          // (≈ maxOutputTokens) from a model that stopped early; parts + head/tail
+          // show whether anything JSON-shaped was emitted at all.
+          const rawText = firstText(result.content);
+          console.warn(
+            `[research-angle] attempt ${attempt}/${maxAttempts} no parseable findings: ` +
+              `${e instanceof Error ? e.message : String(e)} | ` +
+              `usage=${JSON.stringify(result.usage)} ` +
+              `parts=[${result.content.map((p) => p.type).join(',')}] ` +
+              `textLen=${String(rawText.length)} ` +
+              `head=${JSON.stringify(rawText.slice(0, 280))} ` +
+              `tail=${JSON.stringify(rawText.slice(-200))}`,
+          );
         }
       }
       throw lastParseError ?? new ResearchAngleError('research-angle produced no findings');
