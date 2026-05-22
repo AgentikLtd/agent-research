@@ -26,6 +26,27 @@ describe('brief-prompts', () => {
     expect(p.system).toContain('claim');
     expect(p.user).toContain('A');
   });
+  it('research prompt demands source diversity, community signal and digging deeper', () => {
+    const p = buildResearchPrompt({ angle: 'A', topic: 'T', since: 's', until: 'u' });
+    const sys = p.system.toLowerCase();
+    expect(sys).toContain('diversity');
+    expect(sys).toContain('community');
+    expect(sys).toContain('comments');
+    expect(sys).toContain('headline');
+  });
+  it('research prompt injects the community digest as untrusted seed data when supplied', () => {
+    const p = buildResearchPrompt({
+      angle: 'A', topic: 'T', since: 's', until: 'u',
+      communityDigest: '- [Thread title](https://reddit.com/x) — r/callcentres',
+    });
+    expect(p.user).toContain('<community-digest>');
+    expect(p.user).toContain('Thread title');
+    expect(p.user.toLowerCase()).toContain('untrusted');
+  });
+  it('research prompt omits the digest block when no digest is supplied', () => {
+    const p = buildResearchPrompt({ angle: 'A', topic: 'T', since: 's', until: 'u' });
+    expect(p.user).not.toContain('<community-digest>');
+  });
   it('challenge prompt demands independent corroboration + verdicts', () => {
     const p = buildChallengePrompt({ topic: 'T', since: 's', until: 'u', findings: [finding] });
     expect(p.system.toLowerCase()).toContain('corroborate');
