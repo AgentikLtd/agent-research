@@ -238,4 +238,16 @@ describe('createRunBriefSkill', () => {
     const ev = audit.events.find((e) => e.eventType === 'sources.gathered');
     expect(ev?.payload).toMatchObject({ degraded: true });
   });
+
+  it('returns the brief markdown only when returnMarkdown is set', async () => {
+    const registry = wireRegistry({});
+    const base = {
+      registry, profile: fakeProfile(baseProfile), audit: recordingAudit().client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    };
+    const without = await createRunBriefSkill(base).invoke({});
+    expect(without.markdown).toBeUndefined();
+    const withMd = await createRunBriefSkill(base).invoke({ returnMarkdown: true });
+    expect(withMd.markdown).toBe('# Brief\n\nThing [1].');
+  });
 });

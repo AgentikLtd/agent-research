@@ -50,6 +50,8 @@ export interface RunBriefArgs {
    * per-skill manifest defaults.
    */
   readonly model?: string;
+  /** When true, include the synthesised brief markdown in the result (for the eval harness). */
+  readonly returnMarkdown?: boolean;
 }
 
 export interface RunBriefResult {
@@ -62,6 +64,8 @@ export interface RunBriefResult {
   readonly recipients: ReadonlyArray<string>;
   readonly emailMessageId: string;
   readonly storageUri?: string;
+  /** Present only when the caller passed `returnMarkdown: true`. */
+  readonly markdown?: string;
 }
 
 export interface RunBriefDeps {
@@ -415,6 +419,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           recipients: dispatched.recipients,
           emailMessageId: dispatched.emailMessageId,
           ...(dispatched.storageUri !== undefined ? { storageUri: dispatched.storageUri } : {}),
+          ...(args.returnMarkdown === true ? { markdown: composed.markdown } : {}),
         };
         await deps.audit.emit({
           eventType: 'run.completed',
