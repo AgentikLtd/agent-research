@@ -338,10 +338,23 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         );
         const rawFindings: Finding[] = [];
         let angleFailures = 0;
-        for (const r of settled) {
-          if (r.status === 'fulfilled') rawFindings.push(...r.value.findings);
-          else angleFailures += 1;
-        }
+        settled.forEach((r, idx) => {
+          if (r.status === 'fulfilled') {
+            rawFindings.push(...r.value.findings);
+            return;
+          }
+          angleFailures += 1;
+          // Log the cause. A failed research angle was previously only counted
+          // — its `reason` discarded — making research-stage failures opaque in
+          // the logs, even though every other degrade path warns its cause.
+          // (memory.md 2026-05-21 "always log a degrade".)
+          const reason = r.reason;
+          console.warn(
+            `[run-brief] research-angle ${idx + 1}/${settled.length} failed ` +
+              `(${(angles[idx] ?? '').slice(0, 80)}): ` +
+              `${reason instanceof Error ? reason.message : String(reason)}`,
+          );
+        });
         await deps.audit.emit({
           eventType: 'research.gathered',
           payload: { runId, findingCount: rawFindings.length, angleFailures },
