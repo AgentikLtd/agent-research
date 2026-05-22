@@ -1,13 +1,14 @@
 /**
- * run-brief orchestrator — the four-stage research pipeline.
+ * run-brief orchestrator — the research pipeline.
  *
+ *   gather-sources → seed a community digest from the configured sources
  *   plan-research  → decompose the topic into research angles
  *   research-angle → one autonomous web researcher per angle (parallel)
  *   challenge-findings → adversarial verification of the merged findings
  *   synthesize-brief   → final styled markdown document
  *   dispatch-brief     → deliver via the hub channel-router
  *
- * Degradation: plan failure → a single topic angle; a failed research angle is
+ * Degradation: gather-sources failure → empty digest (soft-degrade); plan failure → a single topic angle; a failed research angle is
  * dropped (allSettled); zero findings overall → abort; challenge failure → use
  * the un-adjudicated findings. synthesize/dispatch failures propagate. Every
  * stage boundary emits an audit event; a throw emits `run.failed` first.
@@ -24,6 +25,7 @@ import type {
   PrioritySource,
 } from '../prompts/brief-prompts.js';
 import type { Finding } from '../research/findings.js';
+import { InsufficientSourcesError } from './gather-sources.js';
 import type { GatherSourcesArgs, GatherSourcesResult } from './gather-sources.js';
 import type { SourceItem } from '../sources/contracts.js';
 import type { PlanResearchArgs, PlanResearchResult } from './plan-research.js';
@@ -36,6 +38,8 @@ import type { Skill, SkillRegistry } from './registry.js';
 const RELATIVE_RE = /^-(\d+)([hmd])$/;
 const DEFAULT_MAX_ANGLES = 4;
 const DEFAULT_ANGLE_CONCURRENCY = 3;
+// Digest size cap: 40 items × ~200-char summaries ≈ a few thousand tokens —
+// bounded seed context for each research-angle prompt, not a second corpus.
 const DIGEST_MAX_ITEMS = 40;
 const DIGEST_SUMMARY_MAX_CHARS = 200;
 
@@ -82,7 +86,7 @@ export interface RunBriefDeps {
   readonly angleConcurrency?: number;
 }
 
-type Stage = 'plan' | 'research' | 'challenge' | 'synthesize' | 'dispatch';
+type Stage = 'gather' | 'plan' | 'research' | 'challenge' | 'synthesize' | 'dispatch';
 
 function resolveSince(raw: string | undefined, now: Date): string {
   const input = raw ?? '-72h';
@@ -252,6 +256,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const modelOverride = args.model ?? pickModel(profile);
         const prioritySources = pickPrioritySources(profile);
 
+        stage = 'gather';
         // --- Stage 0: gather community sources ---
         // Soft-degrade: a retrieval failure logs + audits degraded:true and the
         // pipeline continues with an empty digest (researchers fall back to
@@ -278,9 +283,10 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
               e instanceof Error ? e.message : String(e)
             }`,
           );
+          const sourceErrors = e instanceof InsufficientSourcesError ? e.failed : 0;
           await deps.audit.emit({
             eventType: 'sources.gathered',
-            payload: { runId, itemCount: 0, sourceErrors: 0, degraded: true },
+            payload: { runId, itemCount: 0, sourceErrors, degraded: true },
           });
         }
 
