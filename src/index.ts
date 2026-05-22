@@ -29,8 +29,8 @@
  *      pages in disguise. Future flavours add adapters here.
  *   7. Register all skills with the registry. Order matters only in that
  *      `run-brief` references the registry; the others are independent.
- *      gather-sources remains registered (independently invokable) but is
- *      no longer in the run-brief pipeline path.
+ *       gather-sources is registered and invoked by run-brief as the Stage 0
+ *       community-retrieval step (it also stays independently invokable).
  *   8. Boot an HTTP server on `env.PORT`:
  *        - `GET /health`  → `{ ok: true, agent, version }` (no auth).
  *        - `POST /a2a` → bearer-validate against `env.HUB_AGENT_TOKEN`,
@@ -327,8 +327,8 @@ async function main(): Promise<void> {
   };
 
   // --- skills ---
-  // gather-sources is retained (independently invokable) but is no longer
-  // in the run-brief pipeline path — the four-stage pipeline handles research.
+  // gather-sources is registered here; run-brief invokes it as the Stage 0
+  // community-retrieval step that seeds every researcher's digest.
   const registry = createSkillRegistry();
   registry.register(createGatherSourcesSkill({ adapters }));
   registry.register(

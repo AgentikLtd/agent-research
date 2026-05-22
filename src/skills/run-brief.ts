@@ -24,6 +24,8 @@ import type {
   PrioritySource,
 } from '../prompts/brief-prompts.js';
 import type { Finding } from '../research/findings.js';
+import type { GatherSourcesArgs, GatherSourcesResult } from './gather-sources.js';
+import type { SourceItem } from '../sources/contracts.js';
 import type { PlanResearchArgs, PlanResearchResult } from './plan-research.js';
 import type { ResearchAngleArgs, ResearchAngleResult } from './research-angle.js';
 import type { ChallengeFindingsArgs, ChallengeFindingsResult } from './challenge-findings.js';
@@ -34,6 +36,8 @@ import type { Skill, SkillRegistry } from './registry.js';
 const RELATIVE_RE = /^-(\d+)([hmd])$/;
 const DEFAULT_MAX_ANGLES = 4;
 const DEFAULT_ANGLE_CONCURRENCY = 3;
+const DIGEST_MAX_ITEMS = 40;
+const DIGEST_SUMMARY_MAX_CHARS = 200;
 
 export interface RunBriefArgs {
   /** Absolute ISO timestamp OR a relative `-Nh|-Nm|-Nd` string. Defaults to `-72h`. */
@@ -170,6 +174,30 @@ function pickPrioritySources(profile: AgentProfile): readonly PrioritySource[] |
   return out.length > 0 ? out : undefined;
 }
 
+/** Raw `config.sources` array — passed straight to gather-sources, which validates each row. */
+function pickRawSources(profile: AgentProfile): readonly unknown[] {
+  const raw = config(profile)['sources'];
+  return Array.isArray(raw) ? raw : [];
+}
+
+/**
+ * Compact a SourceItem[] into a token-bounded digest string: most-recent
+ * first, capped at DIGEST_MAX_ITEMS, summaries truncated. Empty input -> "".
+ */
+function buildCommunityDigest(items: readonly SourceItem[]): string {
+  if (items.length === 0) return '';
+  const sorted = [...items].sort((a, b) =>
+    (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''),
+  );
+  return sorted.slice(0, DIGEST_MAX_ITEMS).map((it) => {
+    const title = it.title.trim() || it.url;
+    const summary = it.summary?.trim()
+      ? ` · ${it.summary.trim().slice(0, DIGEST_SUMMARY_MAX_CHARS)}`
+      : '';
+    return `- [${title}](${it.url}) — ${it.sourceId} · ${it.publishedAt}${summary}`;
+  }).join('\n');
+}
+
 /** Concurrency-limited map with allSettled semantics — a rejection never rejects the batch. */
 async function settledPool<T, R>(
   items: readonly T[],
@@ -219,6 +247,39 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const topic = pickBriefDescription(profile);
         const modelOverride = args.model ?? pickModel(profile);
         const prioritySources = pickPrioritySources(profile);
+
+        // --- Stage 0: gather community sources ---
+        // Soft-degrade: a retrieval failure logs + audits degraded:true and the
+        // pipeline continues with an empty digest (researchers fall back to
+        // web_search only). A retrieval failure must NEVER abort the run.
+        let communityDigest = '';
+        try {
+          const gathered = await deps.registry.invoke<GatherSourcesArgs, GatherSourcesResult>(
+            'gather-sources',
+            { sources: pickRawSources(profile) as GatherSourcesArgs['sources'], since },
+          );
+          communityDigest = buildCommunityDigest(gathered.items);
+          await deps.audit.emit({
+            eventType: 'sources.gathered',
+            payload: {
+              runId,
+              itemCount: gathered.items.length,
+              sourceErrors: gathered.errors.length,
+              degraded: false,
+            },
+          });
+        } catch (e) {
+          console.warn(
+            `[run-brief] gather-sources failed, continuing with an empty community digest: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+          await deps.audit.emit({
+            eventType: 'sources.gathered',
+            payload: { runId, itemCount: 0, sourceErrors: 0, degraded: true },
+          });
+        }
+
         // withModel injects the per-run model override. Typed as a Record spread
         // to avoid exactOptionalPropertyTypes errors on the individual skill Args types.
         function withModel<A extends Record<string, unknown>>(a: A): A {
@@ -261,6 +322,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             withModel({
               angle, topic, since, until,
               ...(prioritySources !== undefined ? { prioritySources } : {}),
+              ...(communityDigest.length > 0 ? { communityDigest } : {}),
             }),
           ),
         );

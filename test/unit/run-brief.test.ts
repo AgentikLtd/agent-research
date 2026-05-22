@@ -9,6 +9,7 @@ import type { DispatchBriefArgs, DispatchBriefResult } from '../../src/skills/di
 import type { AgentProfile, ProfileClient } from '../../src/hub/profile-client.js';
 import type { AuditClient, AuditEvent } from '../../src/hub/audit-client.js';
 import type { Finding } from '../../src/research/findings.js';
+import type { GatherSourcesArgs, GatherSourcesResult } from '../../src/skills/gather-sources.js';
 
 const aFinding = (claim: string): Finding => ({
   claim, detail: 'd', label: 'GA', confidence: 'high',
@@ -28,6 +29,7 @@ function recordingAudit(): { client: AuditClient; events: AuditEvent[] } {
 }
 
 function wireRegistry(opts: {
+  gather?: Skill<GatherSourcesArgs, GatherSourcesResult>;
   plan?: Skill<PlanResearchArgs, PlanResearchResult>;
   research?: Skill<ResearchAngleArgs, ResearchAngleResult>;
   challenge?: Skill<ChallengeFindingsArgs, ChallengeFindingsResult>;
@@ -36,6 +38,12 @@ function wireRegistry(opts: {
   captures?: { research?: ResearchAngleArgs[]; synth?: SynthesizeBriefArgs[] };
 }) {
   const registry = createSkillRegistry();
+  registry.register(opts.gather ?? {
+    name: 'gather-sources',
+    async invoke() {
+      return { items: [], errors: [], fetchedAt: '2026-05-19T00:00:00.000Z' };
+    },
+  });
   registry.register(opts.plan ?? {
     name: 'plan-research',
     async invoke() { return { angles: ['angle-1', 'angle-2'] }; },
@@ -101,7 +109,7 @@ describe('createRunBriefSkill', () => {
 
     const types = audit.events.map((e) => e.eventType);
     expect(types).toEqual([
-      'run.started', 'research.planned', 'research.gathered',
+      'run.started', 'sources.gathered', 'research.planned', 'research.gathered',
       'findings.challenged', 'brief.synthesized', 'run.completed',
     ]);
   });
@@ -179,5 +187,55 @@ describe('createRunBriefSkill', () => {
     const result = await skill.invoke({});
     expect(result.findingCount).toBe(2);          // research findings still synthesised
     expect(captures.synth[0]?.findings).toHaveLength(2);
+  });
+
+  it('Stage 0 gathers sources, builds a digest and threads it into every research angle', async () => {
+    const captures = { research: [] as ResearchAngleArgs[], synth: [] as SynthesizeBriefArgs[] };
+    const registry = wireRegistry({
+      gather: {
+        name: 'gather-sources',
+        async invoke(): Promise<GatherSourcesResult> {
+          return {
+            items: [{
+              sourceId: 'r/callcentres',
+              title: 'Genesys flow editor lag complaints',
+              url: 'https://reddit.com/r/callcentres/x',
+              publishedAt: '2026-05-18T10:00:00Z',
+              summary: 'Operators report editor latency since the May update.',
+            }],
+            errors: [],
+            fetchedAt: '2026-05-19T00:00:00.000Z',
+          };
+        },
+      },
+      captures,
+    });
+    const audit = recordingAudit();
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(baseProfile), audit: audit.client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    await skill.invoke({});
+    expect(captures.research[0]?.communityDigest).toContain('Genesys flow editor lag complaints');
+    const ev = audit.events.find((e) => e.eventType === 'sources.gathered');
+    expect(ev?.payload).toMatchObject({ itemCount: 1, sourceErrors: 0, degraded: false });
+  });
+
+  it('Stage 0 soft-degrades when gather-sources throws — empty digest, pipeline still completes', async () => {
+    const captures = { research: [] as ResearchAngleArgs[] };
+    const registry = wireRegistry({
+      gather: { name: 'gather-sources', async invoke(): Promise<GatherSourcesResult> { throw new Error('reddit 403'); } },
+      captures,
+    });
+    const audit = recordingAudit();
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(baseProfile), audit: audit.client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    const result = await skill.invoke({});
+    expect(result.findingCount).toBe(2);
+    expect(captures.research[0]?.communityDigest).toBeUndefined();
+    const ev = audit.events.find((e) => e.eventType === 'sources.gathered');
+    expect(ev?.payload).toMatchObject({ degraded: true });
   });
 });
