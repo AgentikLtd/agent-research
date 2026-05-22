@@ -31,4 +31,17 @@ describe('createResearchAngleSkill', () => {
     await expect(skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' }))
       .rejects.toThrow(/upstream down/);
   });
+
+  it('requests a token budget with headroom for thinking-model reasoning', async () => {
+    // A verbose research call reached 94% of the old 16k cap on Gemini 3.5
+    // Flash; a thinking model's reasoning shares this budget with the
+    // Finding[] JSON, so a truncated angle silently fails parseFindings.
+    const { client, calls } = fakeGateway({
+      ok: true, content: [{ type: 'text', text: findingJson }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+    const skill = createResearchAngleSkill({ gateway: client, model: 'google/gemini-3.5-flash' });
+    await skill.invoke({ angle: 'A', topic: 'T', since: 's', until: 'u' });
+    expect(calls[0]?.params.maxOutputTokens).toBeGreaterThanOrEqual(24000);
+  });
 });

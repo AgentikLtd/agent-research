@@ -11,10 +11,11 @@ import { type Finding, parseFindings } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
 const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
-// 16000: a verbose angle's Finding[] JSON exceeded the old 6000 cap and was
-// truncated mid-structure, failing parseFindings. Findings are also bounded
-// to <=8 in the prompt; 16000 leaves ample headroom.
-const DEFAULT_MAX_OUTPUT_TOKENS = 16000;
+// 24000: an angle's Finding[] JSON shares this budget with a thinking model's
+// reasoning tokens. The prior 16000 (itself a bump from 6000) ran to 94% on
+// Gemini 3.5 Flash — a slightly more verbose angle truncates the JSON
+// mid-structure, fails parseFindings, and silently drops the whole angle.
+const DEFAULT_MAX_OUTPUT_TOKENS = 24000;
 
 export interface ResearchAngleArgs {
   readonly angle: string;

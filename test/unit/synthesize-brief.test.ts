@@ -37,4 +37,17 @@ describe('createSynthesizeBriefSkill', () => {
     await expect(skill.invoke({ findings, briefDescription: 'b', since: 's', until: 'u' }))
       .rejects.toBeInstanceOf(SynthesizeBriefError);
   });
+
+  it('requests a token budget with headroom for a long brief plus reasoning', async () => {
+    // The synthesis call hit finish_reason 'length' on Gemini 3.5 Flash — a
+    // thinking model spends reasoning tokens against the same budget, and the
+    // brief is the longest artifact in the pipeline. 12k truncated it.
+    const { client, calls } = fakeGateway({
+      ok: true, content: [{ type: 'text', text: '# Brief' }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+    const skill = createSynthesizeBriefSkill({ gateway: client, model: 'google/gemini-3.5-flash' });
+    await skill.invoke({ findings, briefDescription: 'b', since: 's', until: 'u' });
+    expect(calls[0]?.params.maxOutputTokens).toBeGreaterThanOrEqual(32000);
+  });
 });
