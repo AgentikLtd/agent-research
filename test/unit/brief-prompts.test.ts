@@ -10,11 +10,15 @@ const finding: Finding = {
 };
 
 describe('brief-prompts', () => {
-  it('plan prompt asks for trend + contrarian angles as JSON', () => {
+  it('plan prompt demands community, emerging and contrarian non-obvious angles as JSON', () => {
     const p = buildPlanPrompt({ topic: 'T', since: 's', until: 'u', maxAngles: 4 });
-    expect(p.system.toLowerCase()).toContain('json');
-    expect(p.system.toLowerCase()).toContain('trend');
-    expect(p.system.toLowerCase()).toContain('contrarian');
+    const sys = p.system.toLowerCase();
+    expect(sys).toContain('json');
+    expect(sys).toContain('non-obvious');
+    expect(sys).toContain('community');
+    expect(sys).toContain('emerging');
+    expect(sys).toContain('contrarian');
+    expect(sys).toContain('announcement');
   });
   it('research prompt instructs web search + JSON findings', () => {
     const p = buildResearchPrompt({ angle: 'A', topic: 'T', since: 's', until: 'u' });

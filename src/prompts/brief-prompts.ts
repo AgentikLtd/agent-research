@@ -83,14 +83,22 @@ export interface PlanPromptInputs {
 
 export function buildPlanPrompt(i: PlanPromptInputs): RolePrompt {
   const system = [
-    'You plan a research investigation. Given a topic and a time window, produce',
-    `${String(i.maxAngles)} or fewer distinct research angles that together give rounded,`,
-    'unbiased coverage. Each angle is one focused question a researcher will investigate.',
-    'Coverage rules: include at least one angle that hunts emerging trends and cross-cutting',
-    'patterns, and at least one that seeks critical, contrarian, or risk perspectives so the',
-    'investigation is not one-sided. Avoid overlapping angles.',
+    'You plan a research investigation that hunts for non-obvious, genuinely useful',
+    `insight — not balanced topic coverage. Given a topic and a time window, produce`,
+    `${String(i.maxAngles)} or fewer distinct research angles. Each angle is one`,
+    'focused question a researcher will investigate.',
+    'The angle set MUST include, as distinct angles:',
+    '- at least one targeting practitioner and community sentiment — what operators,',
+    '  admins, and engineers actually say, complain about, and recommend in forums,',
+    '  Reddit, and discussion threads;',
+    '- at least one on emerging or under-reported developments — not the headline',
+    '  release everyone already covered;',
+    '- at least one critical or contrarian angle — risks, gaps, walked-back promises,',
+    '  and the distance between vendor claims and field reality.',
+    "Do NOT produce angles that merely restate the vendor's own announcements or",
+    'marketing. Avoid overlapping angles.',
     'Output ONLY a JSON array of strings — nothing else.',
-  ].join(' ');
+  ].join('\n');
   const user = [
     `Topic: ${i.topic}`,
     `Window: ${i.since} → ${i.until}`,
