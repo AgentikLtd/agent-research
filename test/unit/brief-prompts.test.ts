@@ -34,6 +34,15 @@ describe('brief-prompts', () => {
     expect(sys).toContain('comments');
     expect(sys).toContain('headline');
   });
+  it('research prompt bounds the search loop and mandates emitting the JSON', () => {
+    // Regression guard: an unbounded search instruction made models exhaust the
+    // output-token budget before emitting findings (2026-05-22 bake-off pilot).
+    const p = buildResearchPrompt({ angle: 'A', topic: 'T', since: 's', until: 'u' });
+    const sys = p.system.toLowerCase();
+    expect(sys).toContain('budget');
+    expect(sys).toContain('3 to 5 searches');
+    expect(sys).toContain('total failure');
+  });
   it('research prompt injects the community digest as untrusted seed data when supplied', () => {
     const p = buildResearchPrompt({
       angle: 'A', topic: 'T', since: 's', until: 'u',

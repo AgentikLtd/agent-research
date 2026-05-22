@@ -10,15 +10,17 @@ import { buildResearchPrompt, type PrioritySource } from '../prompts/brief-promp
 import { type Finding, parseFindings } from '../research/findings.js';
 import type { Skill } from './registry.js';
 
-// 10: more search results widen what the researcher READS, not what it emits —
-// the per-angle finding cap (8) and the output-token budget are unchanged, so
-// the known JSON-truncation failure mode is not reopened. (Spec WA3.)
-const DEFAULT_WEB_SEARCH_MAX_RESULTS = 10;
-// 24000: an angle's Finding[] JSON shares this budget with a thinking model's
-// reasoning tokens. The prior 16000 (itself a bump from 6000) ran to 94% on
-// Gemini 3.5 Flash — a slightly more verbose angle truncates the JSON
-// mid-structure, fails parseFindings, and silently drops the whole angle.
-const DEFAULT_MAX_OUTPUT_TOKENS = 24000;
+// 6: web_search results are pulled into the model's context and the agentic
+// tool-use loop spends OUTPUT-token budget. Raising this to 10 (briefly tried,
+// Spec WA3) made models over-search and exhaust the budget before emitting the
+// Finding[] JSON — every angle then failed parseFindings. Reverted to the
+// proven 6; search breadth is now bounded by the prompt instead.
+const DEFAULT_WEB_SEARCH_MAX_RESULTS = 6;
+// 32000: an angle's Finding[] JSON shares this budget with the web-search
+// tool-use loop AND a thinking model's reasoning. 24000 (the prior value) was
+// exhausted by the search loop before the JSON was emitted; 32000 gives
+// headroom for a focused search pass plus the full findings array.
+const DEFAULT_MAX_OUTPUT_TOKENS = 32000;
 
 export interface ResearchAngleArgs {
   readonly angle: string;
