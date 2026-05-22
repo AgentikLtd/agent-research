@@ -246,7 +246,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
       const until = now.toISOString();
       const since = resolveSince(args.since, now);
       const dateYmd = until.slice(0, 10);
-      let stage: Stage = 'plan';
+      let stage: Stage = 'gather';
 
       await deps.audit.emit({ eventType: 'run.started', payload: { runId, since, until } });
 
