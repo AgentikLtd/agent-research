@@ -69,6 +69,12 @@ import { createDispatchBriefSkill } from './skills/dispatch-brief.js';
 import { createRunBriefSkill } from './skills/run-brief.js';
 import { createConsolidateMemoriesSkill } from './skills/consolidate-memories.js';
 import { createOpenAiEmbedder } from './memory/embedder.js';
+import { createMemoryRouter } from './memory/memory-router.js';
+import { createPostgresEpisodicAdapter } from './memory/adapters/episodic.js';
+import { createPostgresSemanticAdapter, createPostgresSemanticSearcher } from './memory/adapters/semantic.js';
+import { createHttpSharedAdapter } from './memory/adapters/shared.js';
+import { createPostgresEpisodicWriter } from './memory/episodic-writer.js';
+import type { EpisodicWriter } from './memory/contracts.js';
 import type { SourceAdapter } from './sources/contracts.js';
 import type { SkillRegistry } from './skills/registry.js';
 
@@ -353,28 +359,85 @@ async function main(): Promise<void> {
     }),
   );
   registry.register(createDispatchBriefSkill({ profile, storage, channel, audit }));
-  registry.register(createRunBriefSkill({ registry, profile, audit }));
 
-  // consolidate-memories — requires DATABASE_URL + EMBEDDER_* env vars.
-  // These are wired in Task 20 (memory substrate); if vars are absent the
-  // skill is skipped at boot rather than crashing the agent.
-  if (env.DATABASE_URL && env.EMBEDDER_BASE_URL && env.EMBEDDER_API_KEY) {
-    const memoryPool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 3 });
+  // --- memory substrate (Task 21) ---
+  // Requires DATABASE_URL (or TENANT_DATABASE_URL) + EMBEDDER_* env vars.
+  // TENANT_DATABASE_URL takes precedence; DATABASE_URL is the legacy alias.
+  // If absent, the memory router + consolidate-memories are both skipped and
+  // the agent operates without episodic writes (graceful degradation).
+  const dbUrl = env.TENANT_DATABASE_URL ?? env.DATABASE_URL;
+  let episodicWriter: EpisodicWriter | undefined;
+
+  if (dbUrl && env.EMBEDDER_BASE_URL && env.EMBEDDER_API_KEY) {
+    const tenantPool = new pg.Pool({ connectionString: dbUrl, max: 5 });
     const embedder = createOpenAiEmbedder({
       model: 'text-embedding-3-small',
       baseUrl: env.EMBEDDER_BASE_URL,
       apiKey: env.EMBEDDER_API_KEY,
     });
+
+    const episodicAdapter = createPostgresEpisodicAdapter({
+      pool: tenantPool,
+      schema: 'agent_research_episodic',
+      agentName: 'genesys-research',
+      tenantId: env.TENANT_ID,
+    });
+    const semanticAdapter = createPostgresSemanticAdapter({
+      pool: tenantPool,
+      schema: 'agent_research_semantic',
+      tenantId: env.TENANT_ID,
+      embedder,
+    });
+    const sharedAdapter = createHttpSharedAdapter({
+      hubBaseUrl: env.HUB_BASE_URL,
+      bearer: env.HUB_AGENT_TOKEN,
+    });
+
+    // Full memory router — available to Task 23's recall() helper.
+    const _memory = createMemoryRouter({
+      episodic: episodicAdapter,
+      semantic: semanticAdapter,
+      shared: sharedAdapter,
+    });
+
+    // SemanticSearcher — available for Task 23's recall() helper.
+    const _semanticSearcher = createPostgresSemanticSearcher({
+      pool: tenantPool,
+      schema: 'agent_research_semantic',
+    });
+
+    // EpisodicWriter — injected into run-brief (Task 21 Step 4).
+    episodicWriter = createPostgresEpisodicWriter({
+      pool: tenantPool,
+      schema: 'agent_research_episodic',
+      agentName: 'genesys-research',
+      tenantId: env.TENANT_ID,
+    });
+
+    // Consolidation cron skill.
     registry.register(createConsolidateMemoriesSkill({
-      pool: memoryPool,
+      pool: tenantPool,
       tenantId: env.TENANT_ID,
       gateway,
       embedder,
       model: resolveSkillModel(manifest, 'consolidate-memories'),
     }));
+
+    console.info('[boot] memory router wired (episodic + semantic + shared)');
   } else {
-    console.warn('[boot] consolidate-memories skipped — DATABASE_URL / EMBEDDER_BASE_URL / EMBEDDER_API_KEY not set');
+    console.warn('[boot] memory substrate skipped — TENANT_DATABASE_URL / EMBEDDER_BASE_URL / EMBEDDER_API_KEY not set');
   }
+
+  // run-brief registered after memory block so episodicWriter is available.
+  // exactOptionalPropertyTypes: spread only when defined.
+  registry.register(
+    createRunBriefSkill({
+      registry,
+      profile,
+      audit,
+      ...(episodicWriter !== undefined ? { episodicWriter } : {}),
+    }),
+  );
 
   const server = createServer((req, res) => {
     void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME).catch(

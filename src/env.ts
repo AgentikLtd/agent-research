@@ -30,7 +30,12 @@ const EnvSchema = z.object({
     .union([z.literal('0'), z.literal('1'), z.literal('true'), z.literal('false')])
     .optional(),
   // Memory substrate — required when consolidate-memories skill is active.
+  // DATABASE_URL is the canonical env var; TENANT_DATABASE_URL is an alias for
+  // the same Postgres connection string that future agent kits expect. Operators
+  // may set either (or both, to the same value). The boot code prefers
+  // TENANT_DATABASE_URL when both are set.
   DATABASE_URL: z.string().url().optional(),
+  TENANT_DATABASE_URL: z.string().url().optional(),
   EMBEDDER_BASE_URL: z.string().url().optional(),
   EMBEDDER_API_KEY: z.string().optional(),
 });
