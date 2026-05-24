@@ -33,6 +33,7 @@ import type { ResearchAngleArgs, ResearchAngleResult } from './research-angle.js
 import type { ChallengeFindingsArgs, ChallengeFindingsResult } from './challenge-findings.js';
 import type { SynthesizeBriefArgs, SynthesizeBriefResult } from './synthesize-brief.js';
 import type { DispatchBriefArgs, DispatchBriefResult } from './dispatch-brief.js';
+import type { EpisodicWriter } from '../memory/contracts.js';
 import type { Skill, SkillRegistry } from './registry.js';
 
 const RELATIVE_RE = /^-(\d+)([hmd])$/;
@@ -76,6 +77,12 @@ export interface RunBriefDeps {
   readonly registry: SkillRegistry;
   readonly profile: ProfileClient;
   readonly audit: AuditClient;
+  /**
+   * Optional episodic writer — injected at boot when the memory substrate env
+   * vars are present. When absent, episodic writes are silently skipped so the
+   * agent operates without a database (dev / test mode).
+   */
+  readonly episodicWriter?: EpisodicWriter;
   /** Test seam: defaults to `() => new Date()`. */
   readonly clock?: () => Date;
   /** Test seam: defaults to `crypto.randomUUID`. */
@@ -247,6 +254,37 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
       const since = resolveSince(args.since, now);
       const dateYmd = until.slice(0, 10);
       let stage: Stage = 'gather';
+      // Episodic writer side-effect helpers.
+      // conversationId = runId so all turns for one brief run share a thread.
+      // turnIndex is monotonically incremented; errors are swallowed so a DB
+      // outage never aborts the pipeline.
+      let turnIndex = 0;
+      const appendEpisodic = async (
+        skillId: string,
+        content: string,
+        costGbp = 0,
+      ): Promise<void> => {
+        if (!deps.episodicWriter) return;
+        try {
+          await deps.episodicWriter.appendTurn({
+            conversationId: runId,
+            skillId,
+            turnIndex: turnIndex++,
+            role: 'assistant',
+            content: content.slice(0, 16_000),
+            spanId: '',
+            tokensIn: 0,
+            tokensOut: 0,
+            costGbp,
+          });
+        } catch (writeErr) {
+          console.warn(
+            `[run-brief] episodic write failed (non-critical, skill=${skillId}): ${
+              writeErr instanceof Error ? writeErr.message : String(writeErr)
+            }`,
+          );
+        }
+      };
 
       await deps.audit.emit({ eventType: 'run.started', payload: { runId, since, until } });
 
@@ -277,6 +315,10 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
               degraded: false,
             },
           });
+          await appendEpisodic(
+            'gather-sources',
+            JSON.stringify({ itemCount: gathered.items.length, sourceErrors: gathered.errors.length }),
+          );
         } catch (e) {
           console.warn(
             `[run-brief] gather-sources failed, continuing with an empty community digest: ${
@@ -288,6 +330,10 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             eventType: 'sources.gathered',
             payload: { runId, itemCount: 0, sourceErrors, degraded: true },
           });
+          await appendEpisodic(
+            'gather-sources',
+            JSON.stringify({ itemCount: 0, sourceErrors, degraded: true }),
+          );
         }
 
         // withModel injects the per-run model override. Typed as a Record spread
@@ -308,6 +354,11 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             }),
           );
           angles = planned.angles.length > 0 ? planned.angles.slice(0, maxAngles) : [topic];
+          await appendEpisodic(
+            'plan-research',
+            JSON.stringify({ angleCount: angles.length, angles }),
+            planned.costGbp,
+          );
         } catch (e) {
           // degrade — research the whole topic as one angle. Log it: a
           // silent degrade looks identical to a model that simply returned
@@ -318,6 +369,10 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             }`,
           );
           angles = [topic];
+          await appendEpisodic(
+            'plan-research',
+            JSON.stringify({ degraded: true, angles }),
+          );
         }
         await deps.audit.emit({
           eventType: 'research.planned',
@@ -359,6 +414,16 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           eventType: 'research.gathered',
           payload: { runId, findingCount: rawFindings.length, angleFailures },
         });
+        // Episodic: aggregate cost across all settled research angles.
+        const researchCostGbp = settled.reduce((sum, r) => {
+          if (r.status === 'fulfilled') return sum + (r.value.costGbp ?? 0);
+          return sum;
+        }, 0);
+        await appendEpisodic(
+          'research-angle',
+          JSON.stringify({ findingCount: rawFindings.length, angleFailures, angleCount: angles.length }),
+          researchCostGbp,
+        );
         if (rawFindings.length === 0) {
           throw new Error('research produced no findings from any angle');
         }
@@ -372,6 +437,11 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             ChallengeFindingsResult
           >('challenge-findings', withModel({ findings: rawFindings, topic, since, until }));
           adjudicated = challenged.findings;
+          await appendEpisodic(
+            'challenge-findings',
+            JSON.stringify({ findingCount: adjudicated.length }),
+            challenged.costGbp,
+          );
         } catch (e) {
           // degrade — synthesise un-adjudicated findings.
           console.warn(
@@ -380,6 +450,10 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             }`,
           );
           adjudicated = rawFindings;
+          await appendEpisodic(
+            'challenge-findings',
+            JSON.stringify({ degraded: true, findingCount: adjudicated.length }),
+          );
         }
         const verdicts = { confirmed: 0, disputed: 0, unverified: 0 };
         for (const f of adjudicated) {
@@ -417,6 +491,13 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             ...(composed.llmCallId !== undefined ? { llmCallId: composed.llmCallId } : {}),
           },
         });
+        await appendEpisodic(
+          'synthesize-brief',
+          // Store the first 16k of the brief markdown so the consolidation cron
+          // can extract durable facts from the synthesized output.
+          composed.markdown,
+          composed.costGbp,
+        );
 
         // --- Stage 5: dispatch ---
         stage = 'dispatch';
@@ -428,6 +509,14 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             date: dateYmd,
             ...(args.dryRun === true ? { dryRun: true } : {}),
           },
+        );
+        await appendEpisodic(
+          'dispatch-brief',
+          JSON.stringify({
+            recipients: dispatched.recipients,
+            emailMessageId: dispatched.emailMessageId,
+            ...(dispatched.storageUri !== undefined ? { storageUri: dispatched.storageUri } : {}),
+          }),
         );
 
         const result: RunBriefResult = {
