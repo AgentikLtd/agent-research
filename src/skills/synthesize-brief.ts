@@ -3,8 +3,9 @@
  * markdown brief in the operator's defined style. No web search: the brief is
  * synthesised only from findings the challenge stage already verified.
  */
-import type { LlmContentPart } from '../contracts.js';
+import type { LlmContentPart, LlmRequestTool } from '../contracts.js';
 import type { GatewayClient } from '../llm/gateway-client.js';
+import type { MemoryTool } from '../memory/contracts.js';
 import {
   buildSynthesisPrompt,
   type GuardrailConfig,
@@ -52,6 +53,20 @@ export interface SynthesizeBriefResult {
 export interface SynthesizeBriefDeps {
   readonly gateway: GatewayClient;
   readonly model: string;
+  /**
+   * Optional memory tool — when present, the Anthropic memory-tool 20250818
+   * definition is advertised to the model so it can read prior briefs and
+   * durable facts before writing.
+   *
+   * NOTE (Task 25): the gateway client is a single-shot HTTP proxy to the hub
+   * `/api/llm/send`. There is no tool-handler loop here — the model's
+   * `tool_use` response blocks would not be consumed, meaning the LLM cannot
+   * actually exercise the memory tool in the current architecture. The tool
+   * definition is registered so Anthropic's API acknowledges the tool and the
+   * model can reason about it; a future multi-turn loop or server-side tool
+   * execution will close this gap. See plan §Task 25 DONE_WITH_CONCERNS note.
+   */
+  readonly memory?: MemoryTool;
 }
 
 export class SynthesizeBriefError extends Error {
@@ -65,6 +80,15 @@ export class SynthesizeBriefError extends Error {
 
 function firstText(content: ReadonlyArray<LlmContentPart>): string {
   return content.filter((p) => p.type === 'text').map((p) => p.text).join('');
+}
+
+/**
+ * Build the Anthropic memory-tool 20250818 definition.
+ * Shape: `{ type: 'memory_20250818', name: 'memory' }` — no inputSchema.
+ * Anthropic's API identifies first-party tools by their `type` field.
+ */
+function buildMemoryToolDef(): LlmRequestTool {
+  return { type: 'memory_20250818' as const, name: 'memory' as const };
 }
 
 export function createSynthesizeBriefSkill(
@@ -87,11 +111,20 @@ export function createSynthesizeBriefSkill(
       const system = args.systemPromptPrefix
         ? `${args.systemPromptPrefix}\n\n${prompt.system}`
         : prompt.system;
+      // Advertise the memory tool when the memory dep is wired. The gateway
+      // is a single-shot HTTP proxy — no tool-handler loop runs here — so the
+      // model cannot actually exercise the tool in this call. The definition is
+      // registered so Anthropic's API acknowledges it and the model can read
+      // the memory paths described in the system prompt; a future multi-turn
+      // loop will close this gap (see deps.memory JSDoc).
+      const tools: LlmRequestTool[] | undefined =
+        deps.memory !== undefined ? [buildMemoryToolDef()] : undefined;
       const result = await deps.gateway.send({
         model: args.model ?? deps.model,
         system,
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
         params: { maxOutputTokens: args.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS },
+        ...(tools !== undefined ? { tools } : {}),
       });
       if (!result.ok) {
         throw new SynthesizeBriefError(

@@ -19,6 +19,8 @@
  *   - 2026-05-20 — added LlmServerTool + LlmRequestTool (ADR-0018 web_search
  *                  server tool support); LlmRequest.tools widened to
  *                  LlmRequestTool[].
+ *   - 2026-05-24 — added LlmFirstPartyTool (Task 25: Anthropic memory-tool
+ *                  20250818 requires `{ type, name }` — no inputSchema/kind).
  */
 
 // ---------------------------------------------------------------------------
@@ -169,8 +171,18 @@ export interface LlmServerTool {
   readonly maxResults?: number;
 }
 
-/** Either a client tool or a provider server tool. */
-export type LlmRequestTool = LlmTool | LlmServerTool;
+/**
+ * Anthropic first-party tool — identified by `type` (e.g. `memory_20250818`).
+ * These tools have no `inputSchema` or `kind`; the Anthropic API recognises them
+ * by their `type` field alone. Added Task 25 (memory-tool 20250818).
+ */
+export interface LlmFirstPartyTool {
+  readonly type: string;
+  readonly name: string;
+}
+
+/** Either a client tool, a provider server tool, or an Anthropic first-party tool. */
+export type LlmRequestTool = LlmTool | LlmServerTool | LlmFirstPartyTool;
 
 /** Tool-use hint passed alongside an `LlmRequest`. */
 export type LlmToolChoice =
