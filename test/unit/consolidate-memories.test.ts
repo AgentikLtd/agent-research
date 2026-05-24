@@ -19,7 +19,7 @@ describe('runConsolidate', () => {
   it('skips when no episodic rows in the window', async () => {
     const pool = mockPool([[]]);
     const gateway = mockGateway({ ok: true, content: [], usage: { inputTokens: 0, outputTokens: 0 } });
-    const r = await runConsolidate({ pool, tenantId: 't1', gateway, embedder: createNullEmbedder('null', 1536), model: 'deepseek/deepseek-v4-pro' });
+    const r = await runConsolidate({ pool, tenantId: 'org_3Dm9w429DcZ2cD3J5KQ2Y6NZyY4', gateway, embedder: createNullEmbedder('null', 384), model: 'deepseek/deepseek-v4-pro' });
     expect(r.written).toBe(0);
     expect(gateway.send).not.toHaveBeenCalled();
   });
@@ -40,7 +40,7 @@ describe('runConsolidate', () => {
       usage: { inputTokens: 100, outputTokens: 50 },
       costGbp: 0.02,
     });
-    const r = await runConsolidate({ pool, tenantId: 't1', gateway, embedder: createNullEmbedder('null', 1536), model: 'deepseek/deepseek-v4-pro' });
+    const r = await runConsolidate({ pool, tenantId: 'org_3Dm9w429DcZ2cD3J5KQ2Y6NZyY4', gateway, embedder: createNullEmbedder('null', 384), model: 'deepseek/deepseek-v4-pro' });
     expect(r.written).toBe(1);
     expect(r.cost).toBeLessThan(0.20);
   });
@@ -48,6 +48,6 @@ describe('runConsolidate', () => {
   it('aborts when cost exceeds cap', async () => {
     const pool = mockPool([[{ id: 'e1', path: '/episodic/c/t.md', content: 'x', role: 'assistant', skill_id: 'synthesize-brief', created_at: new Date() }]]);
     const gateway = mockGateway({ ok: true, content: [{ type: 'text', text: '{"facts":[]}' }], usage: { inputTokens: 1, outputTokens: 1 }, costGbp: 0.30 });
-    await expect(runConsolidate({ pool, tenantId: 't1', gateway, embedder: createNullEmbedder('null', 1536), model: 'deepseek/deepseek-v4-pro' })).rejects.toThrow(/cost £0.3000 exceeded cap/);
+    await expect(runConsolidate({ pool, tenantId: 'org_3Dm9w429DcZ2cD3J5KQ2Y6NZyY4', gateway, embedder: createNullEmbedder('null', 384), model: 'deepseek/deepseek-v4-pro' })).rejects.toThrow(/cost £0.3000 exceeded cap/);
   });
 });

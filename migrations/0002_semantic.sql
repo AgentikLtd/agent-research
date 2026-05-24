@@ -8,11 +8,11 @@ CREATE SCHEMA IF NOT EXISTS agent_research_semantic;
 
 CREATE TABLE agent_research_semantic.facts (
   id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id            UUID NOT NULL,
+  tenant_id            TEXT NOT NULL,
   path                 TEXT NOT NULL,
   content              TEXT NOT NULL,
   topic_tags           TEXT[] NOT NULL DEFAULT '{}',
-  embedding            vector(1536),
+  embedding            vector(384),
   embedding_model      TEXT NOT NULL,
   relevance_score      NUMERIC(4,3) NOT NULL DEFAULT 0.5 CHECK (relevance_score BETWEEN 0 AND 1),
   source_episodic_ids  TEXT[] NOT NULL DEFAULT '{}',
