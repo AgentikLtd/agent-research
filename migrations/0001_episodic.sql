@@ -5,7 +5,7 @@ CREATE SCHEMA IF NOT EXISTS agent_research_episodic;
 
 CREATE TABLE agent_research_episodic.entries (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id       UUID NOT NULL,
+  tenant_id       TEXT NOT NULL,
   path            TEXT NOT NULL,
   content         TEXT NOT NULL,
   conversation_id TEXT,

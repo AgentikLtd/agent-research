@@ -10,7 +10,7 @@ describe('recall()', () => {
     const sharedView = vi.fn(async () => { throw new Error('not found'); });
     const memory = { view: sharedView } as unknown as MemoryTool;
     const block = await recall({
-      topicHint: 'Genesys Q2 update', tenantId: 't1', embedder: createNullEmbedder(),
+      topicHint: 'Genesys Q2 update', tenantId: 'org_3Dm9w429DcZ2cD3J5KQ2Y6NZyY4', embedder: createNullEmbedder(),
       semanticSearcher: searcher, memory, topK: 3,
     });
     expect(block).toBe('');
@@ -25,7 +25,7 @@ describe('recall()', () => {
     } as unknown as MemoryTool;
 
     const block = await recall({
-      topicHint: 'Genesys Q2 update', tenantId: 't1', embedder: createNullEmbedder(),
+      topicHint: 'Genesys Q2 update', tenantId: 'org_3Dm9w429DcZ2cD3J5KQ2Y6NZyY4', embedder: createNullEmbedder(),
       semanticSearcher: searcher, memory, topK: 3,
     });
     expect(block).toContain('Relevant prior learnings');

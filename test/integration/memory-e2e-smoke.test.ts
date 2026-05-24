@@ -23,9 +23,13 @@ const DATABASE_URL = process.env.MEMORY_E2E_DATABASE_URL ?? '';
 const skip = DATABASE_URL === '';
 
 describe.skipIf(skip)('memory e2e smoke', () => {
-  const tenantId = '00000000-0000-0000-0000-000000000001';
+  // Clerk org-style tenant ID — production `tenant_id` is TEXT (Clerk org ID),
+  // not a UUID. See migration 0003 + the schema fix in 0001/0002.
+  const tenantId = 'org_3Dm9w429DcZ2cD3J5KQ2Y6NZyY4';
   const pool = new Pool({ connectionString: DATABASE_URL });
-  const embedder = createNullEmbedder('null', 1536);
+  // 384-dim to match the fastembed default + migration 0004. If a tenant
+  // is still on the 1536-dim OpenAI schema (pre-0004), update this fixture.
+  const embedder = createNullEmbedder('null', 384);
   const writer = createPostgresEpisodicWriter({
     pool,
     schema: 'agent_research_episodic',

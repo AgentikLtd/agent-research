@@ -69,6 +69,7 @@ import { createDispatchBriefSkill } from './skills/dispatch-brief.js';
 import { createRunBriefSkill } from './skills/run-brief.js';
 import { createConsolidateMemoriesSkill } from './skills/consolidate-memories.js';
 import { createOpenAiEmbedder } from './memory/embedder.js';
+import { createFastEmbedEmbedder } from './memory/fastembed-embedder.js';
 import { createMemoryRouter } from './memory/memory-router.js';
 import { createPostgresEpisodicAdapter } from './memory/adapters/episodic.js';
 import { createPostgresSemanticAdapter, createPostgresSemanticSearcher } from './memory/adapters/semantic.js';
@@ -362,23 +363,41 @@ async function main(): Promise<void> {
   registry.register(createDispatchBriefSkill({ profile, storage, channel, audit }));
 
   // --- memory substrate (Task 21) ---
-  // Requires DATABASE_URL (or TENANT_DATABASE_URL) + EMBEDDER_* env vars.
+  // Requires DATABASE_URL (or TENANT_DATABASE_URL).
   // TENANT_DATABASE_URL takes precedence; DATABASE_URL is the legacy alias.
   // If absent, the memory router + consolidate-memories are both skipped and
   // the agent operates without episodic writes (graceful degradation).
+  //
+  // Embedder selection:
+  //   - If EMBEDDER_BASE_URL + EMBEDDER_API_KEY are both set, use the
+  //     OpenAI-compatible embedder (1536-dim, requires external API).
+  //   - Otherwise, fall back to the in-process fastembed embedder
+  //     (384-dim, BGESmallENV15, ONNX runtime). This is the default
+  //     when neither external embedding key is configured — the agent
+  //     no longer requires a /v1/embeddings provider.
+  //
+  // NOTE: the semantic.facts.embedding column must match the embedder's
+  // dimensions. Migration 0004 switches the column to vector(384) for the
+  // fastembed default; switching back to OpenAI requires re-migrating.
   const dbUrl = env.TENANT_DATABASE_URL ?? env.DATABASE_URL;
   let episodicWriter: EpisodicWriter | undefined;
   let memory: MemoryTool | undefined;
   let semanticSearcher: SemanticSearcher | undefined;
   let embedderForRecall: Embedder | undefined;
 
-  if (dbUrl && env.EMBEDDER_BASE_URL && env.EMBEDDER_API_KEY) {
+  if (dbUrl) {
     const tenantPool = new pg.Pool({ connectionString: dbUrl, max: 5 });
-    const embedder = createOpenAiEmbedder({
-      model: 'text-embedding-3-small',
-      baseUrl: env.EMBEDDER_BASE_URL,
-      apiKey: env.EMBEDDER_API_KEY,
-    });
+    const useOpenAi = Boolean(env.EMBEDDER_BASE_URL && env.EMBEDDER_API_KEY);
+    const embedder: Embedder = useOpenAi
+      ? createOpenAiEmbedder({
+          model: 'text-embedding-3-small',
+          baseUrl: env.EMBEDDER_BASE_URL as string,
+          apiKey: env.EMBEDDER_API_KEY as string,
+        })
+      : await createFastEmbedEmbedder();
+    console.info(
+      `[boot] embedder: ${useOpenAi ? 'openai-compatible (1536d)' : 'fastembed local (384d)'}`,
+    );
 
     const episodicAdapter = createPostgresEpisodicAdapter({
       pool: tenantPool,
@@ -432,7 +451,7 @@ async function main(): Promise<void> {
 
     console.info('[boot] memory router wired (episodic + semantic + shared)');
   } else {
-    console.warn('[boot] memory substrate skipped — TENANT_DATABASE_URL / EMBEDDER_BASE_URL / EMBEDDER_API_KEY not set');
+    console.warn('[boot] memory substrate skipped — TENANT_DATABASE_URL / DATABASE_URL not set');
   }
 
   // run-brief registered after memory block so episodic + recall deps are available.

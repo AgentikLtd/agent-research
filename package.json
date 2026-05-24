@@ -20,13 +20,14 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
-    "pg": "^8.13.3",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.217.0",
     "@opentelemetry/resources": "^2.7.1",
     "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/sdk-trace-base": "^2.7.1",
     "@opentelemetry/semantic-conventions": "^1.41.1",
+    "fastembed": "^2.1.0",
+    "pg": "^8.13.3",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
