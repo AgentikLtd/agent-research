@@ -29,6 +29,10 @@ const EnvSchema = z.object({
   SANDBOX_CHECK_SKIP: z
     .union([z.literal('0'), z.literal('1'), z.literal('true'), z.literal('false')])
     .optional(),
+  // Memory substrate — required when consolidate-memories skill is active.
+  DATABASE_URL: z.string().url().optional(),
+  EMBEDDER_BASE_URL: z.string().url().optional(),
+  EMBEDDER_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
