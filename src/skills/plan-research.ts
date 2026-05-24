@@ -28,6 +28,11 @@ export interface PlanResearchArgs {
   readonly maxAngles?: number;
   /** Per-run model override; falls back to the skill's deps model. */
   readonly model?: string;
+  /**
+   * Optional block prepended to the system prompt — used by run-brief to
+   * inject the recall() context block before the model sees the planning task.
+   */
+  readonly systemPromptPrefix?: string;
 }
 
 export interface PlanResearchResult {
@@ -68,9 +73,12 @@ export function createPlanResearchSkill(
         maxAngles,
         ...(args.prioritySources !== undefined ? { prioritySources: args.prioritySources } : {}),
       });
+      const system = args.systemPromptPrefix
+        ? `${args.systemPromptPrefix}\n\n${prompt.system}`
+        : prompt.system;
       const result = await deps.gateway.send({
         model: args.model ?? deps.model,
-        system: prompt.system,
+        system,
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
         params: { maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS },
       });

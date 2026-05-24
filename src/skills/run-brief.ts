@@ -33,7 +33,9 @@ import type { ResearchAngleArgs, ResearchAngleResult } from './research-angle.js
 import type { ChallengeFindingsArgs, ChallengeFindingsResult } from './challenge-findings.js';
 import type { SynthesizeBriefArgs, SynthesizeBriefResult } from './synthesize-brief.js';
 import type { DispatchBriefArgs, DispatchBriefResult } from './dispatch-brief.js';
-import type { EpisodicWriter } from '../memory/contracts.js';
+import type { Embedder, EpisodicWriter, MemoryTool } from '../memory/contracts.js';
+import type { SemanticSearcher } from '../memory/adapters/semantic.js';
+import { recall } from '../memory/recall.js';
 import type { Skill, SkillRegistry } from './registry.js';
 
 const RELATIVE_RE = /^-(\d+)([hmd])$/;
@@ -83,6 +85,18 @@ export interface RunBriefDeps {
    * agent operates without a database (dev / test mode).
    */
   readonly episodicWriter?: EpisodicWriter;
+  /**
+   * Optional memory router — used by recall() to fetch /shared/INDEX.md.
+   * Injected at boot alongside semanticSearcher and embedder when the memory
+   * substrate env vars are present. When absent, recall() is skipped.
+   */
+  readonly memory?: MemoryTool;
+  /** Optional semantic searcher — used by recall() to fetch top-K facts. */
+  readonly semanticSearcher?: SemanticSearcher;
+  /** Optional embedder — used by recall() to embed the query string. */
+  readonly embedder?: Embedder;
+  /** Tenant ID threaded into recall() for vector-search scoping. */
+  readonly tenantId?: string;
   /** Test seam: defaults to `() => new Date()`. */
   readonly clock?: () => Date;
   /** Test seam: defaults to `crypto.randomUUID`. */
@@ -244,6 +258,27 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
   const maxAngles = deps.maxAngles ?? DEFAULT_MAX_ANGLES;
   const angleConcurrency = deps.angleConcurrency ?? DEFAULT_ANGLE_CONCURRENCY;
 
+  /**
+   * Build a recall block for a given topic hint. Returns '' when memory deps
+   * are absent or on any error — recall is non-critical (best-effort context).
+   */
+  async function buildRecallBlock(topicHint: string): Promise<string> {
+    if (!deps.memory || !deps.semanticSearcher || !deps.embedder || !deps.tenantId) return '';
+    return recall({
+      topicHint,
+      tenantId: deps.tenantId,
+      embedder: deps.embedder,
+      semanticSearcher: deps.semanticSearcher,
+      memory: deps.memory,
+      topK: 3,
+    }).catch((err: unknown) => {
+      console.warn(
+        `[run-brief] recall() failed (non-critical): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return '';
+    });
+  }
+
   return {
     name: 'run-brief',
     description: 'Orchestrate plan → research → challenge → synthesize → dispatch.',
@@ -344,6 +379,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
 
         // --- Stage 1: plan ---
         stage = 'plan';
+        const recallBlockForPlan = await buildRecallBlock(`plan research angles for ${topic}`);
         let angles: readonly string[];
         try {
           const planned = await deps.registry.invoke<PlanResearchArgs, PlanResearchResult>(
@@ -351,6 +387,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             withModel({
               topic, since, until, maxAngles,
               ...(prioritySources !== undefined ? { prioritySources } : {}),
+              ...(recallBlockForPlan ? { systemPromptPrefix: recallBlockForPlan } : {}),
             }),
           );
           angles = planned.angles.length > 0 ? planned.angles.slice(0, maxAngles) : [topic];
@@ -472,6 +509,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const guardrails = pickGuardrails(profile);
         const markdownSections = pickMarkdownSections(profile);
         const extra = pickExtraInstructions(profile);
+        const recallBlockForSynthesize = await buildRecallBlock(`synthesize Genesys brief for ${topic}`);
         const composed = await deps.registry.invoke<SynthesizeBriefArgs, SynthesizeBriefResult>(
           'synthesize-brief',
           withModel({
@@ -480,6 +518,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             ...(guardrails !== undefined ? { guardrails } : {}),
             ...(markdownSections !== undefined ? { markdownSections } : {}),
             ...(extra !== undefined ? { extraInstructions: extra } : {}),
+            ...(recallBlockForSynthesize ? { systemPromptPrefix: recallBlockForSynthesize } : {}),
           }),
         );
         await deps.audit.emit({

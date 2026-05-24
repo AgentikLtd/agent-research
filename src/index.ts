@@ -74,7 +74,8 @@ import { createPostgresEpisodicAdapter } from './memory/adapters/episodic.js';
 import { createPostgresSemanticAdapter, createPostgresSemanticSearcher } from './memory/adapters/semantic.js';
 import { createHttpSharedAdapter } from './memory/adapters/shared.js';
 import { createPostgresEpisodicWriter } from './memory/episodic-writer.js';
-import type { EpisodicWriter } from './memory/contracts.js';
+import type { Embedder, EpisodicWriter, MemoryTool } from './memory/contracts.js';
+import type { SemanticSearcher } from './memory/adapters/semantic.js';
 import type { SourceAdapter } from './sources/contracts.js';
 import type { SkillRegistry } from './skills/registry.js';
 
@@ -367,6 +368,9 @@ async function main(): Promise<void> {
   // the agent operates without episodic writes (graceful degradation).
   const dbUrl = env.TENANT_DATABASE_URL ?? env.DATABASE_URL;
   let episodicWriter: EpisodicWriter | undefined;
+  let memory: MemoryTool | undefined;
+  let semanticSearcher: SemanticSearcher | undefined;
+  let embedderForRecall: Embedder | undefined;
 
   if (dbUrl && env.EMBEDDER_BASE_URL && env.EMBEDDER_API_KEY) {
     const tenantPool = new pg.Pool({ connectionString: dbUrl, max: 5 });
@@ -393,18 +397,21 @@ async function main(): Promise<void> {
       bearer: env.HUB_AGENT_TOKEN,
     });
 
-    // Full memory router — available to Task 23's recall() helper.
-    const _memory = createMemoryRouter({
+    // Full memory router — used by recall() helper.
+    memory = createMemoryRouter({
       episodic: episodicAdapter,
       semantic: semanticAdapter,
       shared: sharedAdapter,
     });
 
-    // SemanticSearcher — available for Task 23's recall() helper.
-    const _semanticSearcher = createPostgresSemanticSearcher({
+    // SemanticSearcher — used by recall() helper.
+    semanticSearcher = createPostgresSemanticSearcher({
       pool: tenantPool,
       schema: 'agent_research_semantic',
     });
+
+    // Embedder reference for recall() — same instance used by the semantic adapter.
+    embedderForRecall = embedder;
 
     // EpisodicWriter — injected into run-brief (Task 21 Step 4).
     episodicWriter = createPostgresEpisodicWriter({
@@ -428,7 +435,7 @@ async function main(): Promise<void> {
     console.warn('[boot] memory substrate skipped — TENANT_DATABASE_URL / EMBEDDER_BASE_URL / EMBEDDER_API_KEY not set');
   }
 
-  // run-brief registered after memory block so episodicWriter is available.
+  // run-brief registered after memory block so episodic + recall deps are available.
   // exactOptionalPropertyTypes: spread only when defined.
   registry.register(
     createRunBriefSkill({
@@ -436,6 +443,10 @@ async function main(): Promise<void> {
       profile,
       audit,
       ...(episodicWriter !== undefined ? { episodicWriter } : {}),
+      ...(memory !== undefined ? { memory } : {}),
+      ...(semanticSearcher !== undefined ? { semanticSearcher } : {}),
+      ...(embedderForRecall !== undefined ? { embedder: embedderForRecall } : {}),
+      ...(dbUrl ? { tenantId: env.TENANT_ID } : {}),
     }),
   );
 
