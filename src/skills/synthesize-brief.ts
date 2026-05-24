@@ -35,6 +35,11 @@ export interface SynthesizeBriefArgs {
   readonly extraInstructions?: string;
   readonly maxOutputTokens?: number;
   readonly model?: string;
+  /**
+   * Optional block prepended to the system prompt — used by run-brief to
+   * inject the recall() context block before the model sees the synthesis task.
+   */
+  readonly systemPromptPrefix?: string;
 }
 
 export interface SynthesizeBriefResult {
@@ -79,9 +84,12 @@ export function createSynthesizeBriefSkill(
         ...(args.markdownSections !== undefined ? { markdownSections: args.markdownSections } : {}),
         ...(args.extraInstructions !== undefined ? { extraInstructions: args.extraInstructions } : {}),
       });
+      const system = args.systemPromptPrefix
+        ? `${args.systemPromptPrefix}\n\n${prompt.system}`
+        : prompt.system;
       const result = await deps.gateway.send({
         model: args.model ?? deps.model,
-        system: prompt.system,
+        system,
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
         params: { maxOutputTokens: args.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS },
       });
