@@ -123,6 +123,11 @@ x-agentik/schedule:
       task: run-brief
       missed_run_policy: skip
       timezone: Europe/London
+    - id: consolidate-memories
+      schedule: "0 3 * * *"            # Daily 03:00 — extract facts from episodic transcripts
+      task: consolidate-memories
+      missed_run_policy: skip
+      timezone: Europe/London
 
 x-agentik/storage:
   primary: namespace
