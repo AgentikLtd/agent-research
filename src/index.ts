@@ -47,6 +47,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
+import pg from 'pg';
 
 import { loadEnv } from './env.js';
 import { initTracing } from './tracing.js';
@@ -66,6 +67,8 @@ import { createChallengeFindingsSkill } from './skills/challenge-findings.js';
 import { createSynthesizeBriefSkill } from './skills/synthesize-brief.js';
 import { createDispatchBriefSkill } from './skills/dispatch-brief.js';
 import { createRunBriefSkill } from './skills/run-brief.js';
+import { createConsolidateMemoriesSkill } from './skills/consolidate-memories.js';
+import { createOpenAiEmbedder } from './memory/embedder.js';
 import type { SourceAdapter } from './sources/contracts.js';
 import type { SkillRegistry } from './skills/registry.js';
 
@@ -351,6 +354,27 @@ async function main(): Promise<void> {
   );
   registry.register(createDispatchBriefSkill({ profile, storage, channel, audit }));
   registry.register(createRunBriefSkill({ registry, profile, audit }));
+
+  // consolidate-memories — requires DATABASE_URL + EMBEDDER_* env vars.
+  // These are wired in Task 20 (memory substrate); if vars are absent the
+  // skill is skipped at boot rather than crashing the agent.
+  if (env.DATABASE_URL && env.EMBEDDER_BASE_URL && env.EMBEDDER_API_KEY) {
+    const memoryPool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 3 });
+    const embedder = createOpenAiEmbedder({
+      model: 'text-embedding-3-small',
+      baseUrl: env.EMBEDDER_BASE_URL,
+      apiKey: env.EMBEDDER_API_KEY,
+    });
+    registry.register(createConsolidateMemoriesSkill({
+      pool: memoryPool,
+      tenantId: env.TENANT_ID,
+      gateway,
+      embedder,
+      model: resolveSkillModel(manifest, 'consolidate-memories'),
+    }));
+  } else {
+    console.warn('[boot] consolidate-memories skipped — DATABASE_URL / EMBEDDER_BASE_URL / EMBEDDER_API_KEY not set');
+  }
 
   const server = createServer((req, res) => {
     void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME).catch(
