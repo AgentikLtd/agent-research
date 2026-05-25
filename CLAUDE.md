@@ -104,9 +104,11 @@ Flavors are **co-tenanted at runtime** — a tenant enables which flavors it wan
 
 ## Status (refresh date in-place when editing)
 
-- **Phase 1 (scaffold-only)** — 2026-05-19: package.json, configs, Dockerfile, CI workflows, CLAUDE.md committed. NO source files yet; Phase 6 lands `src/index.ts`, manifest.yaml, the Genesys-flavor adapters, and the eval suite.
+- **LIVE on demo1505** — 2026-05-24: Genesys flavor deployed; 4-stage research pipeline (plan → 4× parallel research → adversarial verifier → synthesis) runs end-to-end. Weekly `run-brief` cron fires Mondays 07:00 UTC via the in-hub scheduler. Sonnet 4.6 default model (locked in after n=4 bake-off). Memory substrate Plan #1 deployed: `agent_memories` + `agent_episodes` tables, fastembed-js semantic recall block prepended to plan-research prompts.
+- Image base: `node:22-slim` (not Alpine — fastembed native dep ships gnu only).
+- Open allowlists: `.audit-allowlist.json` for fastembed → tar@6 advisories, expires **2026-08-22** (renew or bump fastembed before).
 
 ## Open issues / blockers
 
-- Manifest CI validation step deferred to Phase 6 (validator script lives under workspace `scripts/validate-manifest.mjs` and is invoked locally; CI hook still TODO).
-- Audit-gates CI job references `scripts/audit-prod.mjs`, `scripts/validate-env-drift.mjs`, `scripts/validate-ci-templates.mjs` which are NOT vendored yet — Phase 2 work copies these from the briefing repo.
+- Cron scheduler timezone falls back to UTC for named IANA zones (`Europe/London` actually fires at UTC); Phase 2 fix pending.
+- Knowledge sources currently empty for this agent — the research-angle pipeline composes context per call.
