@@ -145,9 +145,11 @@ x-agentik/storage:
 x-agentik/memory:
   episodic:
     backend: postgres
+    schema: agent_research_episodic       # Tier 2 follow-up (2026-05-26) — read by the install saga so agent_profiles.config.memory_schemas is populated automatically. Matches migrations/0001_episodic.sql.
     retention_days: 90
   semantic:
     backend: pgvector
+    schema: agent_research_semantic       # Mirrors migrations/0002_semantic.sql. Both schemas are required for the per-agent memory viewer to read transcripts + facts.
     embedding_model: text-embedding-3-small
     decay: relevance_threshold
   procedural:
