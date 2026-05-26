@@ -184,9 +184,32 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
+/**
+ * Optional `message/send` chat dependencies. When present, the
+ * handler dispatches `message/send` calls (used by the studio per-agent
+ * chat surface) to the LLM gateway with the agent's persona as the
+ * system prompt. When absent, `message/send` falls back to a
+ * `unknown method` JSON-RPC error preserving the pre-2026-05-26
+ * behaviour.
+ *
+ * Aligns this agent's A2A surface with agent-runtime's `message/send`
+ * contract (memory.md 2026-05-19): `params: { input: string }` →
+ * `result: { text: string, role: 'ROLE_AGENT' }`. The literal "ping"
+ * short-circuits to a "pong (...)" reply as the universal smoke
+ * surface; everything else routes through the gateway.
+ */
+export interface ChatDeps {
+  readonly gateway: { send(req: import('./llm/gateway-client.js').LlmSendRequest): Promise<import('./llm/gateway-client.js').LlmSendResult> };
+  readonly model: string;
+  readonly systemPrompt: string;
+  readonly serviceName: string;
+  readonly now: () => string;
+}
+
 export interface HandleJsonRpcDeps {
   readonly registry: SkillRegistry;
   readonly expectedToken: string;
+  readonly chat?: ChatDeps;
 }
 
 export interface JsonRpcHandlerResult {
@@ -231,6 +254,59 @@ export async function handleJsonRpc(
     return {
       status: 400,
       body: jsonRpcError(parsed.id, JSONRPC_INVALID_REQUEST, 'jsonrpc must be "2.0" with a string method'),
+    };
+  }
+
+  // `message/send` is the universal A2A chat method (agent-runtime
+  // parity, memory.md 2026-05-19). Optional — only available when
+  // `deps.chat` is wired in `main()`. When chat is configured the
+  // handler dispatches to it; otherwise we fall through to the
+  // `unknown_method` path so the surface degrades cleanly.
+  if (parsed.method === 'message/send') {
+    if (!deps.chat) {
+      return {
+        status: 200,
+        body: jsonRpcError(parsed.id, JSONRPC_METHOD_NOT_FOUND, 'message/send not configured'),
+      };
+    }
+    const input =
+      typeof (parsed.params as { input?: unknown } | undefined)?.input === 'string'
+        ? ((parsed.params as { input: string }).input)
+        : '';
+    if (input.trim().toLowerCase() === 'ping') {
+      return {
+        status: 200,
+        body: jsonRpcSuccess(parsed.id, {
+          text: `pong (${deps.chat.serviceName} @ ${deps.chat.now()})`,
+          role: 'ROLE_AGENT',
+        }),
+      };
+    }
+    if (input.trim().length === 0) {
+      return {
+        status: 200,
+        body: jsonRpcError(parsed.id, JSONRPC_INVALID_PARAMS, 'params.input must be a non-empty string'),
+      };
+    }
+    const llm = await deps.chat.gateway.send({
+      model: deps.chat.model,
+      system: deps.chat.systemPrompt,
+      messages: [{ role: 'user', content: [{ type: 'text', text: input }] }],
+      params: { maxOutputTokens: 1024 },
+    });
+    if (!llm.ok) {
+      return {
+        status: 200,
+        body: jsonRpcError(parsed.id, JSONRPC_SKILL_ERROR, `gateway error: ${llm.error.message}`),
+      };
+    }
+    const text = llm.content
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text)
+      .join('');
+    return {
+      status: 200,
+      body: jsonRpcSuccess(parsed.id, { text, role: 'ROLE_AGENT' }),
     };
   }
 
@@ -469,8 +545,27 @@ async function main(): Promise<void> {
     }),
   );
 
+  // Wire `message/send` chat support. Model + system prompt are
+  // resolved from the manifest's `x-agentik/model.default` and a
+  // generic research-agent persona (agent-research is template-shaped
+  // so we don't read per-tenant persona at this layer — for ad-hoc
+  // user-created agents that's the agent-runtime image's job).
+  const chatDeps: ChatDeps = {
+    gateway,
+    model: resolveSkillModel(manifest, 'message-send'),
+    systemPrompt:
+      `You are ${env.AGENT_NAME}, a research-specialist agent in the Agentik Studio platform. ` +
+      `Your job is to research a topic by gathering and synthesising information from configured sources, ` +
+      `then producing a structured brief. When the user chats with you directly, answer their question ` +
+      `concisely from your existing knowledge or the topics you've researched before. Keep replies short ` +
+      `(2-4 sentences) unless asked to elaborate. Do NOT invent research findings on the fly — for a ` +
+      `full briefing, ask the operator to invoke the run-brief skill.`,
+    serviceName: env.AGENT_NAME,
+    now: (): string => new Date().toISOString(),
+  };
+
   const server = createServer((req, res) => {
-    void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME).catch(
+    void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME, chatDeps).catch(
       (e: unknown) => {
         console.error('[http] unexpected error', e);
         if (!res.headersSent) {
@@ -511,6 +606,7 @@ async function handleRequest(
   registry: SkillRegistry,
   expectedToken: string,
   agentName: string,
+  chat?: ChatDeps,
 ): Promise<void> {
   const url = req.url ?? '/';
   if (req.method === 'GET' && url === '/health') {
@@ -529,7 +625,7 @@ async function handleRequest(
     const body = await readBody(req);
     const authHeader = req.headers['authorization'];
     const result = await handleJsonRpc(
-      { registry, expectedToken },
+      { registry, expectedToken, ...(chat ? { chat } : {}) },
       typeof authHeader === 'string' ? authHeader : undefined,
       body,
     );
