@@ -11,9 +11,11 @@ DOES NOT crawl the open web unrestricted — every fetch must be on a per-tenant
 ## Public interface
 
 A2A server endpoints (port `4003`):
-- `POST /a2a` — JSON-RPC 2.0 (architecture's A2A protocol from `@agentik/shared-types/a2a`)
+- `POST /a2a` — JSON-RPC 2.0 (architecture's A2A protocol from `@agentik/shared-types/a2a`). Now implements `message/send` (parity with `agent-runtime`).
 - `GET /health`
 - `GET /metrics`
+
+The `manifest.yaml` declares this agent's **memory schema** (episodic + semantic) — the `agent_memories` / `agent_episodes` substrate it relies on for semantic recall.
 
 Outbound calls:
 - Hub `/api/channel/dispatch` — delivers the brief via the channel-router with
@@ -70,7 +72,7 @@ Flavors are **co-tenanted at runtime** — a tenant enables which flavors it wan
 ## Boundaries
 
 - DOES NOT call LLM providers directly. Use the hub's `/api/llm/send` (via the LLM client in `src/llm/` — Phase 6).
-- DOES NOT call AgentMail directly. Delivery is via `agent-email-manager` A2A.
+- DOES NOT call AgentMail directly. Delivery is via the hub `/api/channel/dispatch` channel-router (`event_id=scheduled_summary` → `agentmail`, falling back to `web-inbox`). AgentMail is a channel, not a specialist's responsibility — there is no A2A hop through `agent-email-manager`.
 - DOES NOT cross tenant boundaries. Every adapter receives a `tenant_id` and every span/log/audit carries it.
 - DOES NOT mutate shared-types. Schema changes go via `cross-repo-reviewer`.
 
