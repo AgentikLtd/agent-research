@@ -11,6 +11,8 @@ import type { AuditClient, AuditEvent } from '../../src/hub/audit-client.js';
 import type { Finding } from '../../src/research/findings.js';
 import type { GatherSourcesArgs, GatherSourcesResult } from '../../src/skills/gather-sources.js';
 import { InsufficientSourcesError } from '../../src/skills/gather-sources.js';
+import type { Embedder, MemoryTool } from '../../src/memory/contracts.js';
+import type { SemanticSearcher } from '../../src/memory/adapters/semantic.js';
 
 const aFinding = (claim: string): Finding => ({
   claim, detail: 'd', label: 'GA', confidence: 'high',
@@ -269,5 +271,49 @@ describe('createRunBriefSkill', () => {
     expect(without.markdown).toBeUndefined();
     const withMd = await createRunBriefSkill(base).invoke({ returnMarkdown: true });
     expect(withMd.markdown).toBe('# Brief\n\nThing [1].');
+  });
+});
+
+function memoryDeps(): {
+  memory: MemoryTool;
+  semanticSearcher: SemanticSearcher;
+  embedder: Embedder;
+  tenantId: string;
+} {
+  return {
+    tenantId: 't1',
+    embedder: { embed: async () => [0.1, 0.2, 0.3] } as unknown as Embedder,
+    semanticSearcher: {
+      topK: async () => [{ path: '/semantic/f1.md', score: 0.9, content: 'a prior fact' }],
+    } as unknown as SemanticSearcher,
+    memory: { view: async () => '' } as unknown as MemoryTool,
+  };
+}
+
+describe('run-brief skipRecall', () => {
+  it('omits the recall prefix on synthesize when skipRecall is true, even with memory wired', async () => {
+    const captures: { synth: SynthesizeBriefArgs[] } = { synth: [] };
+    const registry = wireRegistry({ captures });
+    const skill = createRunBriefSkill({
+      registry,
+      profile: fakeProfile(baseProfile),
+      audit: recordingAudit().client,
+      ...memoryDeps(),
+    });
+    await skill.invoke({ skipRecall: true });
+    expect(captures.synth[0]?.systemPromptPrefix).toBeUndefined();
+  });
+
+  it('includes the recall prefix on synthesize when skipRecall is false', async () => {
+    const captures: { synth: SynthesizeBriefArgs[] } = { synth: [] };
+    const registry = wireRegistry({ captures });
+    const skill = createRunBriefSkill({
+      registry,
+      profile: fakeProfile(baseProfile),
+      audit: recordingAudit().client,
+      ...memoryDeps(),
+    });
+    await skill.invoke({ skipRecall: false });
+    expect(captures.synth[0]?.systemPromptPrefix).toContain('Relevant prior learnings');
   });
 });

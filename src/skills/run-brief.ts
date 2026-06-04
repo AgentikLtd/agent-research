@@ -59,6 +59,12 @@ export interface RunBriefArgs {
   readonly model?: string;
   /** When true, include the synthesised brief markdown in the result (for the eval harness). */
   readonly returnMarkdown?: boolean;
+  /**
+   * When true, suppress the memory recall block on every pipeline skill —
+   * the memory-OFF arm for B5 A/B trials. Default (undefined/false) keeps
+   * recall on. Decoupled from episodic writes, which continue regardless.
+   */
+  readonly skipRecall?: boolean;
 }
 
 export interface RunBriefResult {
@@ -262,7 +268,8 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
    * Build a recall block for a given topic hint. Returns '' when memory deps
    * are absent or on any error — recall is non-critical (best-effort context).
    */
-  async function buildRecallBlock(topicHint: string): Promise<string> {
+  async function buildRecallBlock(topicHint: string, skipRecall: boolean): Promise<string> {
+    if (skipRecall) return '';
     if (!deps.memory || !deps.semanticSearcher || !deps.embedder || !deps.tenantId) return '';
     return recall({
       topicHint,
@@ -379,7 +386,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
 
         // --- Stage 1: plan ---
         stage = 'plan';
-        const recallBlockForPlan = await buildRecallBlock(`plan research angles for ${topic}`);
+        const recallBlockForPlan = await buildRecallBlock(`plan research angles for ${topic}`, args.skipRecall === true);
         let angles: readonly string[];
         try {
           const planned = await deps.registry.invoke<PlanResearchArgs, PlanResearchResult>(
@@ -509,7 +516,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const guardrails = pickGuardrails(profile);
         const markdownSections = pickMarkdownSections(profile);
         const extra = pickExtraInstructions(profile);
-        const recallBlockForSynthesize = await buildRecallBlock(`synthesize Genesys brief for ${topic}`);
+        const recallBlockForSynthesize = await buildRecallBlock(`synthesize Genesys brief for ${topic}`, args.skipRecall === true);
         const composed = await deps.registry.invoke<SynthesizeBriefArgs, SynthesizeBriefResult>(
           'synthesize-brief',
           withModel({
