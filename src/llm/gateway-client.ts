@@ -34,6 +34,8 @@ export interface LlmSendRequest {
   readonly system?: string;
   readonly tools?: ReadonlyArray<LlmRequestTool>;
   readonly params: LlmGenerationParams;
+  /** Canonical skill id, forwarded as the x-agentik-skill header for cost attribution. */
+  readonly skill?: string;
 }
 
 export interface LlmSendSuccess {
@@ -85,6 +87,7 @@ export function createGatewayClient(deps: GatewayClientDeps): GatewayClient {
   const endpoint = `${deps.hubUrl.replace(/\/$/, '')}/api/llm/send`;
   return {
     async send(req) {
+      const { skill, ...wireBody } = req;
       let response: Response;
       try {
         response = await fetcher(endpoint, {
@@ -93,8 +96,9 @@ export function createGatewayClient(deps: GatewayClientDeps): GatewayClient {
             authorization: `Bearer ${deps.token}`,
             'content-type': 'application/json',
             accept: 'application/json',
+            'x-agentik-skill': skill ?? '',
           },
-          body: JSON.stringify(req),
+          body: JSON.stringify(wireBody),
         });
       } catch (e) {
         return {
