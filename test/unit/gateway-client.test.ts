@@ -64,6 +64,27 @@ describe('createGatewayClient', () => {
     }
   });
 
+  it('sets x-agentik-skill from req.skill and keeps skill OUT of the JSON body', async () => {
+    const seen: { skillHeader: string; bodyHasSkill: boolean; bodyModel: string }[] = [];
+    const fetcher: typeof fetch = async (_input, init) => {
+      const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+      seen.push({
+        skillHeader: new Headers(init?.headers).get('x-agentik-skill') ?? '<null>',
+        bodyHasSkill: 'skill' in body,
+        bodyModel: String(body['model'] ?? ''),
+      });
+      return new Response(
+        JSON.stringify({ ok: true, response: { id: 'r', content: [{ type: 'text', text: 'x' }], usage: { inputTokens: 1, outputTokens: 1 } } }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    };
+    const client = createGatewayClient({ hubUrl: 'https://h', token: 't', fetcher });
+    await client.send({ ...baseReq, skill: 'synthesize-brief' });
+    await client.send(baseReq);
+    expect(seen[0]).toEqual({ skillHeader: 'synthesize-brief', bodyHasSkill: false, bodyModel: baseReq.model });
+    expect(seen[1]).toEqual({ skillHeader: '', bodyHasSkill: false, bodyModel: baseReq.model });
+  });
+
   it('returns ok:false when the fetcher throws', async () => {
     const fetcher: typeof fetch = async () => {
       throw new Error('connect ECONNREFUSED');
