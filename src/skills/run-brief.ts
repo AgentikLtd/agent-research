@@ -88,7 +88,7 @@ export interface RunBriefResult {
    * because Component C populates llm_calls.skill.
    */
   readonly costGbp: number;
-  /** Per-skill successful-stage GBP spend (keys: plan-research, research-angle, challenge-findings, synthesize-brief). */
+  /** Per-skill successful-stage GBP spend. Keys are the skill ids of stages that returned a non-zero costGbp; in the current pipeline: plan-research, research-angle, challenge-findings, synthesize-brief. */
   readonly costBySkill: Record<string, number>;
 }
 
@@ -596,7 +596,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           recipients: dispatched.recipients,
           emailMessageId: dispatched.emailMessageId,
           costGbp: totalCostGbp,
-          costBySkill,
+          costBySkill: { ...costBySkill },
           ...(dispatched.storageUri !== undefined ? { storageUri: dispatched.storageUri } : {}),
           ...(args.returnMarkdown === true ? { markdown: composed.markdown } : {}),
         };
