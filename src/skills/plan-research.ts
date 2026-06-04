@@ -81,6 +81,7 @@ export function createPlanResearchSkill(
         system,
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
         params: { maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS },
+        skill: 'plan-research',
       });
       if (!result.ok) {
         throw new PlanResearchError(`plan-research gateway failure: ${result.error.message}`);
