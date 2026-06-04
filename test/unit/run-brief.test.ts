@@ -291,6 +291,42 @@ function memoryDeps(): {
   };
 }
 
+describe('run-brief cost accounting', () => {
+  it('returns total costGbp and a per-skill breakdown', async () => {
+    const registry = wireRegistry({
+      plan: { name: 'plan-research', async invoke() { return { angles: ['a1', 'a2'], costGbp: 0.01 }; } },
+      research: {
+        name: 'research-angle',
+        async invoke(a: ResearchAngleArgs) { return { findings: [aFinding(`finding ${a.angle}`)], costGbp: 0.02 }; },
+      },
+      challenge: {
+        name: 'challenge-findings',
+        async invoke(a: ChallengeFindingsArgs) {
+          return { findings: a.findings.map((f) => ({ ...f, verdict: 'confirmed' as const })), costGbp: 0.03 };
+        },
+      },
+      synth: {
+        name: 'synthesize-brief',
+        async invoke() { return { markdown: '# Brief\n\nThing [1].', citationCount: 1, costGbp: 0.05 }; },
+      },
+    });
+
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(baseProfile), audit: recordingAudit().client,
+    });
+    const result = await skill.invoke({ dryRun: true });
+
+    // 2 angles × 0.02 = 0.04 research; 0.01 plan + 0.04 + 0.03 challenge + 0.05 synth = 0.13
+    expect(result.costGbp).toBeCloseTo(0.13, 5);
+    expect(result.costBySkill).toEqual({
+      'plan-research': 0.01,
+      'research-angle': 0.04,
+      'challenge-findings': 0.03,
+      'synthesize-brief': 0.05,
+    });
+  });
+});
+
 describe('run-brief skipRecall', () => {
   it('omits the recall prefix on synthesize when skipRecall is true, even with memory wired', async () => {
     const captures: { synth: SynthesizeBriefArgs[] } = { synth: [] };

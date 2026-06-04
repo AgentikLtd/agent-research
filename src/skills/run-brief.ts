@@ -79,6 +79,17 @@ export interface RunBriefResult {
   readonly storageUri?: string;
   /** Present only when the caller passed `returnMarkdown: true`. */
   readonly markdown?: string;
+  /**
+   * GBP spend across SUCCESSFULLY-PARSED LLM stages for this run. NOT total
+   * billed cost: a stage that bills the provider then throws on parse (e.g.
+   * research-angle's up-to-3 retry loop, or plan/challenge parse failures)
+   * is excluded. For exact billed cost the B5 A/B reconciles this against
+   * SUM(llm_calls.cost_gbp) GROUP BY skill for the run window — now possible
+   * because Component C populates llm_calls.skill.
+   */
+  readonly costGbp: number;
+  /** Per-skill successful-stage GBP spend (keys: plan-research, research-angle, challenge-findings, synthesize-brief). */
+  readonly costBySkill: Record<string, number>;
 }
 
 export interface RunBriefDeps {
@@ -301,6 +312,14 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
       // turnIndex is monotonically incremented; errors are swallowed so a DB
       // outage never aborts the pipeline.
       let turnIndex = 0;
+      let totalCostGbp = 0;
+      const costBySkill: Record<string, number> = {};
+      const accrue = (skillId: string, c: number | undefined): void => {
+        if (typeof c === 'number' && c > 0) {
+          totalCostGbp += c;
+          costBySkill[skillId] = (costBySkill[skillId] ?? 0) + c;
+        }
+      };
       const appendEpisodic = async (
         skillId: string,
         content: string,
@@ -403,6 +422,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             JSON.stringify({ angleCount: angles.length, angles }),
             planned.costGbp,
           );
+          accrue('plan-research', planned.costGbp);
         } catch (e) {
           // degrade — research the whole topic as one angle. Log it: a
           // silent degrade looks identical to a model that simply returned
@@ -468,6 +488,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           JSON.stringify({ findingCount: rawFindings.length, angleFailures, angleCount: angles.length }),
           researchCostGbp,
         );
+        accrue('research-angle', researchCostGbp);
         if (rawFindings.length === 0) {
           throw new Error('research produced no findings from any angle');
         }
@@ -486,6 +507,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
             JSON.stringify({ findingCount: adjudicated.length }),
             challenged.costGbp,
           );
+          accrue('challenge-findings', challenged.costGbp);
         } catch (e) {
           // degrade — synthesise un-adjudicated findings.
           console.warn(
@@ -544,6 +566,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           composed.markdown,
           composed.costGbp,
         );
+        accrue('synthesize-brief', composed.costGbp);
 
         // --- Stage 5: dispatch ---
         stage = 'dispatch';
@@ -572,6 +595,8 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           citationCount: composed.citationCount,
           recipients: dispatched.recipients,
           emailMessageId: dispatched.emailMessageId,
+          costGbp: totalCostGbp,
+          costBySkill,
           ...(dispatched.storageUri !== undefined ? { storageUri: dispatched.storageUri } : {}),
           ...(args.returnMarkdown === true ? { markdown: composed.markdown } : {}),
         };
