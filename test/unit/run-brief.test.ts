@@ -283,6 +283,7 @@ function memoryDeps(): {
   return {
     tenantId: 't1',
     embedder: { embed: async () => [0.1, 0.2, 0.3] } as unknown as Embedder,
+    // topK must return >=1 fact so recall() emits a non-empty block
     semanticSearcher: {
       topK: async () => [{ path: '/semantic/f1.md', score: 0.9, content: 'a prior fact' }],
     } as unknown as SemanticSearcher,
@@ -293,7 +294,14 @@ function memoryDeps(): {
 describe('run-brief skipRecall', () => {
   it('omits the recall prefix on synthesize when skipRecall is true, even with memory wired', async () => {
     const captures: { synth: SynthesizeBriefArgs[] } = { synth: [] };
-    const registry = wireRegistry({ captures });
+    const planCaptures: PlanResearchArgs[] = [];
+    const registry = wireRegistry({
+      captures,
+      plan: {
+        name: 'plan-research',
+        async invoke(a: PlanResearchArgs) { planCaptures.push(a); return { angles: ['angle-1', 'angle-2'] }; },
+      },
+    });
     const skill = createRunBriefSkill({
       registry,
       profile: fakeProfile(baseProfile),
@@ -302,11 +310,19 @@ describe('run-brief skipRecall', () => {
     });
     await skill.invoke({ skipRecall: true });
     expect(captures.synth[0]?.systemPromptPrefix).toBeUndefined();
+    expect(planCaptures[0]?.systemPromptPrefix).toBeUndefined();
   });
 
   it('includes the recall prefix on synthesize when skipRecall is false', async () => {
     const captures: { synth: SynthesizeBriefArgs[] } = { synth: [] };
-    const registry = wireRegistry({ captures });
+    const planCaptures: PlanResearchArgs[] = [];
+    const registry = wireRegistry({
+      captures,
+      plan: {
+        name: 'plan-research',
+        async invoke(a: PlanResearchArgs) { planCaptures.push(a); return { angles: ['angle-1', 'angle-2'] }; },
+      },
+    });
     const skill = createRunBriefSkill({
       registry,
       profile: fakeProfile(baseProfile),
@@ -315,5 +331,6 @@ describe('run-brief skipRecall', () => {
     });
     await skill.invoke({ skipRecall: false });
     expect(captures.synth[0]?.systemPromptPrefix).toContain('Relevant prior learnings');
+    expect(planCaptures[0]?.systemPromptPrefix).toContain('Relevant prior learnings');
   });
 });
