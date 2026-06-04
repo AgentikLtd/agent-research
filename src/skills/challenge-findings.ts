@@ -74,6 +74,7 @@ export function createChallengeFindingsSkill(
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
         tools: [webSearch],
         params: { maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS },
+        skill: 'challenge-findings',
       });
       if (!result.ok) {
         throw new ChallengeFindingsError(`challenge-findings gateway failure: ${result.error.message}`);

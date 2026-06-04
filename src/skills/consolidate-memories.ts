@@ -44,6 +44,7 @@ export async function runConsolidate(deps: ConsolidateMemoriesDeps): Promise<{ w
     system: systemPrompt,
     messages: [{ role: 'user', content: [{ type: 'text', text: `Episodic transcripts (JSON):\n${userPayload}` }] }],
     params: { maxOutputTokens: 4000 },
+    skill: 'consolidate-memories',
   });
 
   if (!response.ok) {

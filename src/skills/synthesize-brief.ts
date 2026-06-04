@@ -125,6 +125,7 @@ export function createSynthesizeBriefSkill(
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
         params: { maxOutputTokens: args.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS },
         ...(tools !== undefined ? { tools } : {}),
+        skill: 'synthesize-brief',
       });
       if (!result.ok) {
         throw new SynthesizeBriefError(
