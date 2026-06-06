@@ -14,7 +14,7 @@ import type {
   ChannelDispatchClient,
   ChannelDispatchResult,
 } from '../../src/hub/channel-dispatch-client.js';
-import type { AuditClient } from '../../src/hub/audit-client.js';
+import type { AuditClient, AuditEvent } from '../../src/hub/audit-client.js';
 
 function makeProfile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
@@ -72,9 +72,11 @@ function fakeChannel(
   };
 }
 
-function fakeAudit(): AuditClient {
+function fakeAudit(capture?: { events: AuditEvent[] }): AuditClient {
   return {
-    async emit() {},
+    async emit(event) {
+      if (capture) capture.events.push(event);
+    },
   };
 }
 
@@ -113,8 +115,13 @@ describe('createDispatchBriefSkill', () => {
     expect(result.channelId).toBe('agentmail');
     expect(result.recipients).toEqual(['ops@example.com', 'analyst@example.com']);
 
-    expect(storageCapture.path).toBe('genesys-research/briefs/2026-05-19.md');
+    // Regression guard for AGK-017 double-nesting: the path is RELATIVE
+    // to the token namespace — NO `genesys-research/` prefix. The hub PUT
+    // route scopes by the token's namespace, so prepending it here would
+    // produce the doubly-nested `genesys-research/genesys-research/...` key.
+    expect(storageCapture.path).toBe('briefs/2026-05-19.md');
     expect(storageCapture.body).toBe('# Brief body');
+    expect(result.storageWarning).toBeUndefined();
 
     // Channel dispatch shape: event_id=scheduled_summary, title=subject,
     // body=markdown, recipients comma-joined in metadata.
@@ -127,6 +134,60 @@ describe('createDispatchBriefSkill', () => {
     expect(channelCapture.args?.metadata?.['storage_uri']).toBe(
       'workspace://genesys-research/briefs/2026-05-19.md',
     );
+  });
+
+  it('storage put failure is observable but does NOT abort the dispatch (AGK-017)', async () => {
+    const profile = makeProfile();
+    const tenant: TenantSettings = {
+      tenant_id: 'demo1505',
+      operator_email: 'ops@example.com',
+    };
+    const channelCapture: { args?: ChannelDispatchArgs } = {};
+    const auditCapture: { events: AuditEvent[] } = { events: [] };
+    const warnLines: Array<{ line: string; detail?: unknown }> = [];
+
+    const skill = createDispatchBriefSkill({
+      profile: fakeProfileClient(profile, tenant),
+      storage: fakeStorage({
+        ok: false,
+        error: { code: 'http_500', message: 'gateway /api/storage/put 500: boom' },
+      }),
+      channel: fakeChannel(
+        { ok: true, messageId: 'mail_msg_99', channelId: 'agentmail' },
+        channelCapture,
+      ),
+      audit: fakeAudit(auditCapture),
+      warn: (line, detail) => warnLines.push({ line, detail }),
+    });
+
+    const result = await skill.invoke({
+      subject: 's',
+      body: 'b',
+      date: '2026-05-19',
+    });
+
+    // (a) channel dispatch STILL happened — brief was delivered.
+    expect(channelCapture.args?.eventId).toBe('scheduled_summary');
+    expect(result.emailMessageId).toBe('mail_msg_99');
+    expect(result.dryRun).toBe(false);
+
+    // (b) an audit event was emitted with the path + error.
+    const failureEvent = auditCapture.events.find(
+      (e) => e.eventType === 'dispatch.storage_put_failed',
+    );
+    expect(failureEvent).toBeDefined();
+    expect(failureEvent?.payload['path']).toBe('briefs/2026-05-19.md');
+    expect(failureEvent?.payload['error']).toBe(
+      'gateway /api/storage/put 500: boom',
+    );
+
+    // (c) the returned result carries the warning signal.
+    expect(result.storageWarning).toContain('gateway /api/storage/put 500: boom');
+    // storageUri must NOT be set on failure.
+    expect(result.storageUri).toBeUndefined();
+
+    // (d) warn was still called.
+    expect(warnLines.some((w) => w.line.includes('storage put failed'))).toBe(true);
   });
 
   it('dedupes recipients across tenant operator_email and profile additional_recipients (case-insensitive)', async () => {
@@ -226,7 +287,7 @@ describe('createDispatchBriefSkill', () => {
     expect(storageCalled).toBe(false);
     expect(channelCalled).toBe(false);
     expect(result.dryRun).toBe(true);
-    expect(result.storageUri).toBe('dryrun://genesys-research/briefs/2026-05-19.md');
+    expect(result.storageUri).toBe('dryrun://briefs/2026-05-19.md');
     expect(result.emailMessageId).toMatch(/^dryrun-message-/);
   });
 });
