@@ -35,11 +35,14 @@
  *   values inside metadata (flat key→string|number|boolean|null). The
  *   AgentMail / web-inbox adapter splits on the hub side.
  *
- * Storage namespace (template-extensibility — CLAUDE.md §14):
- *   Do NOT hardcode `genesys/`. The path is derived in this order:
- *     1. `profile.config.output.storage_namespace` (string)         — explicit override.
- *     2. `<agent_name>` from the profile (e.g. `genesys-research`)  — default.
- *   Final path: `<namespace>/briefs/<YYYY-MM-DD>.md`.
+ * Storage path (AGK-017):
+ *   The hub `POST /api/storage/put` route scopes every object key by the
+ *   TOKEN namespace (`asNamespace(auth.agentName)` → `genesys-research/…`)
+ *   and treats `body.path` as the RELATIVE path WITHIN that namespace. The
+ *   skill therefore writes a RELATIVE path only — `briefs/<YYYY-MM-DD>.md` —
+ *   and must NOT prepend the agent namespace itself, or the final object key
+ *   becomes doubly-nested (`genesys-research/genesys-research/briefs/…`) and
+ *   the artefact disappears from the Files tab's namespace listing.
  *
  * Dry-run (`dryRun: true`):
  *   Skips storage + channel dispatch entirely and returns synthetic ids
@@ -108,16 +111,6 @@ export interface DispatchBriefDeps {
   readonly warn?: (line: string, detail?: unknown) => void;
 }
 
-function resolveStorageNamespace(profile: AgentProfile): string {
-  const config = (profile['config'] ?? {}) as Record<string, unknown>;
-  const output = (config['output'] ?? {}) as Record<string, unknown>;
-  const explicit = output['storage_namespace'];
-  if (typeof explicit === 'string' && explicit.trim().length > 0) {
-    return explicit.trim().replace(/^\/+|\/+$/g, '');
-  }
-  return profile.agent_name.replace(/^\/+|\/+$/g, '');
-}
-
 function resolveRecipients(
   profile: AgentProfile,
   tenant: TenantSettings,
@@ -179,8 +172,10 @@ export function createDispatchBriefSkill(
         );
       }
 
-      const namespace = resolveStorageNamespace(profile);
-      const storagePath = `${namespace}/briefs/${args.date}.md`;
+      // AGK-017: RELATIVE path only. The hub PUT route scopes the object
+      // key by the token namespace; prepending the namespace here produces
+      // a doubly-nested key that vanishes from the Files tab.
+      const storagePath = `briefs/${args.date}.md`;
 
       const isDryRun = args.dryRun === true;
       if (isDryRun) {
@@ -207,6 +202,13 @@ export function createDispatchBriefSkill(
       } else {
         storageWarning = `storage put failed: ${putResult.error.message}`;
         warn(`[dispatch-brief] ${storageWarning}`, { path: storagePath });
+        // AGK-017: make the silent swallow observable. The put stays
+        // best-effort (the brief still ships), but the operator now gets
+        // an audit signal in addition to the stdout warning.
+        await deps.audit.emit({
+          eventType: 'dispatch.storage_put_failed',
+          payload: { path: storagePath, error: putResult.error.message },
+        });
       }
 
       // 2. Channel dispatch — required. Recipients comma-joined because
