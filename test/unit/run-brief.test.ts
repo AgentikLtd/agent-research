@@ -393,6 +393,35 @@ describe('run-brief skipRecall', () => {
   });
 });
 
+// DDR-001 anti-dead-field proof (Phase 6 Task 6.6): stands in for the planned
+// eval task because test/evals/runner.ts is absent. These unit tests trace the
+// verifier system_prompt override end-to-end — config.subagents[verifier] →
+// run-brief stageOpts('verifier') → challenge-findings skill → buildChallengePrompt
+// → the `system` string sent to the gateway — proving the persona is a LIVE
+// consumed field, not a dead/loadable-only one (anti-AGK-019).
+describe('run-brief verifier persona is a live consumer (DDR-001 anti-dead-field)', () => {
+  it('Test A: orchestrator threads config.subagents[verifier].system_prompt into challenge-findings', async () => {
+    const captures = { challenge: [] as ChallengeFindingsArgs[] };
+    const registry = wireRegistry({ captures });
+    const profile: AgentProfile = {
+      ...baseProfile,
+      config: {
+        ...baseProfile.config,
+        // enabled NOT false → normal challenge path runs.
+        subagents: [{ id: 'verifier', name: 'V', system_prompt: 'SENTINEL_VERIFIER_ROLE_9f3a' }],
+      },
+    };
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(profile), audit: recordingAudit().client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    await skill.invoke({});
+    // The recorded challenge invoke arg must carry the verifier persona override.
+    expect(captures.challenge).toHaveLength(1);
+    expect(captures.challenge[0]?.systemPromptOverride).toBe('SENTINEL_VERIFIER_ROLE_9f3a');
+  });
+});
+
 describe('run-brief config.subagents wiring (DDR-001)', () => {
   it('(a) applies a research persona system_prompt + model from config.subagents', async () => {
     const captures = { research: [] as ResearchAngleArgs[] };
