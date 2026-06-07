@@ -41,6 +41,14 @@ export interface SynthesizeBriefArgs {
    * inject the recall() context block before the model sees the synthesis task.
    */
   readonly systemPromptPrefix?: string;
+  /**
+   * Replaces the overridable analyst-role span of the system prompt
+   * (DDR-001 Phase 6). Distinct from systemPromptPrefix: prefix PREPENDS recall
+   * context, override REPLACES the role const. The dynamic persona/guardrail/
+   * section pushes and the static tail (citation protocol, source flags, noise
+   * log, length envelope, memory) are always preserved.
+   */
+  readonly systemPromptOverride?: string;
 }
 
 export interface SynthesizeBriefResult {
@@ -98,16 +106,21 @@ export function createSynthesizeBriefSkill(
     name: 'synthesize-brief',
     description: 'Synthesise verified findings into the final styled markdown brief.',
     async invoke(args) {
-      const prompt = buildSynthesisPrompt({
-        findings: args.findings,
-        briefDescription: args.briefDescription,
-        since: args.since,
-        until: args.until,
-        ...(args.persona !== undefined ? { persona: args.persona } : {}),
-        ...(args.guardrails !== undefined ? { guardrails: args.guardrails } : {}),
-        ...(args.markdownSections !== undefined ? { markdownSections: args.markdownSections } : {}),
-        ...(args.extraInstructions !== undefined ? { extraInstructions: args.extraInstructions } : {}),
-      });
+      const prompt = buildSynthesisPrompt(
+        {
+          findings: args.findings,
+          briefDescription: args.briefDescription,
+          since: args.since,
+          until: args.until,
+          ...(args.persona !== undefined ? { persona: args.persona } : {}),
+          ...(args.guardrails !== undefined ? { guardrails: args.guardrails } : {}),
+          ...(args.markdownSections !== undefined ? { markdownSections: args.markdownSections } : {}),
+          ...(args.extraInstructions !== undefined ? { extraInstructions: args.extraInstructions } : {}),
+        },
+        args.systemPromptOverride !== undefined
+          ? { systemPromptOverride: args.systemPromptOverride }
+          : undefined,
+      );
       const system = args.systemPromptPrefix
         ? `${args.systemPromptPrefix}\n\n${prompt.system}`
         : prompt.system;

@@ -25,6 +25,11 @@ export interface ChallengeFindingsArgs {
   readonly since: string;
   readonly until: string;
   readonly model?: string;
+  /**
+   * Replaces the overridable verifier-role span of the system prompt
+   * (DDR-001 Phase 6). The fixed verdict output-format tail is always preserved.
+   */
+  readonly systemPromptOverride?: string;
 }
 
 export interface ChallengeFindingsResult {
@@ -57,12 +62,17 @@ export function createChallengeFindingsSkill(
     name: 'challenge-findings',
     description: 'Adversarially verify researcher findings with independent web search.',
     async invoke(args) {
-      const prompt = buildChallengePrompt({
-        topic: args.topic,
-        since: args.since,
-        until: args.until,
-        findings: args.findings,
-      });
+      const prompt = buildChallengePrompt(
+        {
+          topic: args.topic,
+          since: args.since,
+          until: args.until,
+          findings: args.findings,
+        },
+        args.systemPromptOverride !== undefined
+          ? { systemPromptOverride: args.systemPromptOverride }
+          : undefined,
+      );
       const webSearch: LlmServerTool = {
         kind: 'server',
         tool: 'web_search',
