@@ -37,6 +37,7 @@ import type { Embedder, EpisodicWriter, MemoryTool } from '../memory/contracts.j
 import type { SemanticSearcher } from '../memory/adapters/semantic.js';
 import { recall } from '../memory/recall.js';
 import type { Skill, SkillRegistry } from './registry.js';
+import type { SubagentDef } from '../contracts.js';
 
 const RELATIVE_RE = /^-(\d+)([hmd])$/;
 const DEFAULT_MAX_ANGLES = 4;
@@ -218,6 +219,43 @@ function pickPrioritySources(profile: AgentProfile): readonly PrioritySource[] |
     });
   }
   return out.length > 0 ? out : undefined;
+}
+
+const SAFE_STAGE_TOOLS: Record<string, readonly string[]> = {
+  plan: [], research: ['web_search'], verifier: ['web_search'], synthesizer: [],
+};
+/**
+ * Read config.subagents into a Map keyed by id (DDR-001). Defensive narrowing
+ * mirrors pickPersona/pickGuardrails. Each persona's tool_overrides is clamped
+ * to the per-stage SAFE_STAGE_TOOLS allow-list — defence-in-depth against
+ * direct-DB tampering (the hub ceiling validator is the primary gate).
+ */
+function pickSubagents(profile: AgentProfile): Map<string, SubagentDef> {
+  const raw = config(profile)['subagents'];
+  const out = new Map<string, SubagentDef>();
+  if (!Array.isArray(raw)) return out;
+  for (const row of raw) {
+    if (row === null || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    if (typeof r['id'] !== 'string' || typeof r['name'] !== 'string' || typeof r['system_prompt'] !== 'string') continue;
+    const safe = SAFE_STAGE_TOOLS[r['id']] ?? [];
+    const requested = Array.isArray(r['tool_overrides'])
+      ? r['tool_overrides'].filter((t): t is string => typeof t === 'string')
+      : [];
+    out.set(r['id'], {
+      id: r['id'], name: r['name'], system_prompt: r['system_prompt'],
+      tool_overrides: requested.filter((t) => safe.includes(t)),
+      ...(typeof r['description'] === 'string' ? { description: r['description'] } : {}),
+      ...(typeof r['model'] === 'string' ? { model: r['model'] } : {}),
+      ...(typeof r['enabled'] === 'boolean' ? { enabled: r['enabled'] } : {}),
+    });
+  }
+  return out;
+}
+
+/** Test seam for pickSubagents. */
+export function pickSubagentsForTest(profile: Pick<AgentProfile, 'config'>): Map<string, SubagentDef> {
+  return pickSubagents(profile as unknown as AgentProfile);
 }
 
 /** Raw `config.sources` array — passed straight to gather-sources, which validates each row. */

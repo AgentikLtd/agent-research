@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRunBriefSkill } from '../../src/skills/run-brief.js';
+import { createRunBriefSkill, pickSubagentsForTest } from '../../src/skills/run-brief.js';
 import { createSkillRegistry, type Skill } from '../../src/skills/registry.js';
 import type { PlanResearchArgs, PlanResearchResult } from '../../src/skills/plan-research.js';
 import type { ResearchAngleArgs, ResearchAngleResult } from '../../src/skills/research-angle.js';
@@ -324,6 +324,19 @@ describe('run-brief cost accounting', () => {
       'challenge-findings': 0.03,
       'synthesize-brief': 0.05,
     });
+  });
+});
+
+describe('run-brief pickSubagents', () => {
+  it('pickSubagents reads config.subagents keyed by id; clamps tools; skips malformed (DDR-001)', () => {
+    expect(pickSubagentsForTest({ config: {} }).size).toBe(0);
+    const m = pickSubagentsForTest({ config: { subagents: [
+      { id: 'verifier', name: 'V', system_prompt: 'verify', tool_overrides: ['web_search', 'evil'] },
+      { id: 'bad' },
+    ] } });
+    expect(m.get('verifier')?.system_prompt).toBe('verify');
+    expect(m.get('verifier')?.tool_overrides).toEqual(['web_search']); // 'evil' clamped
+    expect(m.has('bad')).toBe(false);
   });
 });
 
