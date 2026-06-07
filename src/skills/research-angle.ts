@@ -31,6 +31,11 @@ export interface ResearchAngleArgs {
   /** Stage-0 community digest, injected as seed leads into the prompt. */
   readonly communityDigest?: string;
   readonly model?: string;
+  /**
+   * Replaces the overridable researcher-role span of the system prompt
+   * (DDR-001 Phase 6). The fixed FINDING_SCHEMA_TEXT tail is always preserved.
+   */
+  readonly systemPromptOverride?: string;
 }
 
 export interface ResearchAngleResult {
@@ -64,14 +69,19 @@ export function createResearchAngleSkill(
     name: 'research-angle',
     description: 'Autonomously research one angle with web search; emit Finding[].',
     async invoke(args) {
-      const prompt = buildResearchPrompt({
-        angle: args.angle,
-        topic: args.topic,
-        since: args.since,
-        until: args.until,
-        ...(args.prioritySources !== undefined ? { prioritySources: args.prioritySources } : {}),
-        ...(args.communityDigest !== undefined ? { communityDigest: args.communityDigest } : {}),
-      });
+      const prompt = buildResearchPrompt(
+        {
+          angle: args.angle,
+          topic: args.topic,
+          since: args.since,
+          until: args.until,
+          ...(args.prioritySources !== undefined ? { prioritySources: args.prioritySources } : {}),
+          ...(args.communityDigest !== undefined ? { communityDigest: args.communityDigest } : {}),
+        },
+        args.systemPromptOverride !== undefined
+          ? { systemPromptOverride: args.systemPromptOverride }
+          : undefined,
+      );
       const webSearch: LlmServerTool = {
         kind: 'server',
         tool: 'web_search',

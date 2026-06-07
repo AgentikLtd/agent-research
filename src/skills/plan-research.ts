@@ -33,6 +33,14 @@ export interface PlanResearchArgs {
    * inject the recall() context block before the model sees the planning task.
    */
   readonly systemPromptPrefix?: string;
+  /**
+   * Replaces the overridable planning-role span of the system prompt
+   * (DDR-001 Phase 6). Distinct from systemPromptPrefix: prefix PREPENDS recall
+   * context, override REPLACES the role const. The fixed JSON output-format tail
+   * is always preserved. When both are present the prefix wraps the
+   * override-composed prompt: `prefix\n\n[override ?? DEFAULT_ROLE, tail]`.
+   */
+  readonly systemPromptOverride?: string;
 }
 
 export interface PlanResearchResult {
@@ -66,13 +74,18 @@ export function createPlanResearchSkill(
     description: 'Decompose a research topic into focused, rounded research angles.',
     async invoke(args) {
       const maxAngles = args.maxAngles ?? DEFAULT_MAX_ANGLES;
-      const prompt = buildPlanPrompt({
-        topic: args.topic,
-        since: args.since,
-        until: args.until,
-        maxAngles,
-        ...(args.prioritySources !== undefined ? { prioritySources: args.prioritySources } : {}),
-      });
+      const prompt = buildPlanPrompt(
+        {
+          topic: args.topic,
+          since: args.since,
+          until: args.until,
+          maxAngles,
+          ...(args.prioritySources !== undefined ? { prioritySources: args.prioritySources } : {}),
+        },
+        args.systemPromptOverride !== undefined
+          ? { systemPromptOverride: args.systemPromptOverride }
+          : undefined,
+      );
       const system = args.systemPromptPrefix
         ? `${args.systemPromptPrefix}\n\n${prompt.system}`
         : prompt.system;
