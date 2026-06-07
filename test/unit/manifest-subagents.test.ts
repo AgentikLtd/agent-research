@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
@@ -69,23 +69,29 @@ describe('manifest x-agentik/subagents (DDR-001)', () => {
     });
   });
 
-  it('validates against the shared-types SubagentsExtension schema', () => {
-    const schema = JSON.parse(
-      readFileSync(
-        resolve(here(), '../../../shared-types/schemas/manifest/manifest.schema.json'),
-        'utf-8',
-      ),
-    ) as Record<string, unknown>;
-    const ajv = new Ajv({ allErrors: true, strict: false });
-    // Register the whole schema so `$ref: #/definitions/SubagentDef` resolves,
-    // then pull the SubagentsExtension subschema by ref.
-    ajv.addSchema(schema, 'manifest');
-    const validate = ajv.getSchema('manifest#/definitions/SubagentsExtension');
-    if (!validate) throw new Error('SubagentsExtension definition not found in schema');
-    const ok = validate(ext);
-    if (!ok) console.error(validate.errors);
-    expect(ok).toBe(true);
-  });
+  // Canonical schema lives in the SIBLING shared-types repo. agent-research is
+  // intentionally standalone (no workspace dep), so in a single-repo CI checkout
+  // the sibling path does not exist — skip there. The schema itself is tested in
+  // shared-types' own suite; here the byte-parity tests below are the real guard.
+  const SCHEMA_PATH = resolve(
+    here(),
+    '../../../shared-types/schemas/manifest/manifest.schema.json',
+  );
+  it.skipIf(!existsSync(SCHEMA_PATH))(
+    'validates against the shared-types SubagentsExtension schema',
+    () => {
+      const schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf-8')) as Record<string, unknown>;
+      const ajv = new Ajv({ allErrors: true, strict: false });
+      // Register the whole schema so `$ref: #/definitions/SubagentDef` resolves,
+      // then pull the SubagentsExtension subschema by ref.
+      ajv.addSchema(schema, 'manifest');
+      const validate = ajv.getSchema('manifest#/definitions/SubagentsExtension');
+      if (!validate) throw new Error('SubagentsExtension definition not found in schema');
+      const ok = validate(ext);
+      if (!ok) console.error(validate.errors);
+      expect(ok).toBe(true);
+    },
+  );
 
   // The crux: a seeded persona's system_prompt, used as systemPromptOverride,
   // reproduces the live default prompt byte-for-byte.
