@@ -21,6 +21,9 @@
  *                  LlmRequestTool[].
  *   - 2026-05-24 — added LlmFirstPartyTool (Task 25: Anthropic memory-tool
  *                  20250818 requires `{ type, name }` — no inputSchema/kind).
+ *   - 2026-06-07 — added SubagentDef (DDR-001); byte-mirror of
+ *                  shared-types/manifest. Subagents are runtime plumbing:
+ *                  agent-orchestrated, observable, never user-authored.
  */
 
 // ---------------------------------------------------------------------------
@@ -270,3 +273,20 @@ export type LlmCallResult =
       readonly ok: false;
       readonly error: { readonly code?: string; readonly message: string };
     };
+
+// ---------------------------------------------------------------------------
+// subagents (subset) — DDR-001 SubagentDef. Canonical:
+// @agentik/shared-types/manifest. VENDORED — keep byte-parity; sync on upgrade.
+// ---------------------------------------------------------------------------
+
+/** A single subagent persona (DDR-001). Depth is always 1. */
+export interface SubagentDef {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly system_prompt: string;
+  readonly model?: string;
+  readonly tool_overrides?: readonly string[];
+  readonly enabled?: boolean;
+  readonly fan_out?: boolean;
+}
