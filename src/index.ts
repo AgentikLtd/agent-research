@@ -382,9 +382,12 @@ async function main(): Promise<void> {
   });
   const audit = createAuditClient({
     hubUrl: env.HUB_BASE_URL,
+    agentId: env.AGENT_ID,
     token: env.HUB_AGENT_TOKEN,
-    // POST /api/audit/emit isn't wired yet — see hub audit-client header.
-    mode: 'noop',
+    // Trace POSTs go to the per-agent /api/agents/[id]/trace route (DDR-001).
+    // Defaults to remote because a token is present in production; noop is the
+    // dev fallback when no token is set. Failures (e.g. a 404 pre-roll) are
+    // swallowed — audit is non-critical.
   });
   // Channel dispatch — replaces the old email-manager A2A hop. The hub's
   // channel-router resolves the actual adapter (agentmail / web-inbox /
