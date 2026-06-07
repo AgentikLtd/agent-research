@@ -258,6 +258,14 @@ export function pickSubagentsForTest(profile: Pick<AgentProfile, 'config'>): Map
   return pickSubagents(profile as unknown as AgentProfile);
 }
 
+/** Config-driven worker concurrency from `config.delegation.max_concurrent_workers` (DDR-001). */
+function pickDelegationConcurrency(profile: AgentProfile): number | undefined {
+  const raw = config(profile)['delegation'];
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const n = (raw as Record<string, unknown>)['max_concurrent_workers'];
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 ? n : undefined;
+}
+
 /** Raw `config.sources` array — passed straight to gather-sources, which validates each row. */
 function pickRawSources(profile: AgentProfile): readonly unknown[] {
   const raw = config(profile)['sources'];
@@ -392,6 +400,18 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const topic = pickBriefDescription(profile);
         const modelOverride = args.model ?? pickModel(profile);
         const prioritySources = pickPrioritySources(profile);
+        const subagents = pickSubagents(profile);
+        const effectiveConcurrency = pickDelegationConcurrency(profile) ?? angleConcurrency;
+        /** Per-stage override pulled from config.subagents (DDR-001). Spread AFTER
+         *  withModel so a per-subagent model wins over the per-run model. */
+        function stageOpts(id: string): { systemPromptOverride?: string; model?: string } {
+          const s = subagents.get(id);
+          if (!s) return {};
+          return {
+            ...(s.system_prompt ? { systemPromptOverride: s.system_prompt } : {}),
+            ...(s.model ? { model: s.model } : {}),
+          };
+        }
 
         stage = 'gather';
         // --- Stage 0: gather community sources ---
@@ -448,11 +468,14 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         try {
           const planned = await deps.registry.invoke<PlanResearchArgs, PlanResearchResult>(
             'plan-research',
-            withModel({
-              topic, since, until, maxAngles,
-              ...(prioritySources !== undefined ? { prioritySources } : {}),
-              ...(recallBlockForPlan ? { systemPromptPrefix: recallBlockForPlan } : {}),
-            }),
+            {
+              ...withModel({
+                topic, since, until, maxAngles,
+                ...(prioritySources !== undefined ? { prioritySources } : {}),
+                ...(recallBlockForPlan ? { systemPromptPrefix: recallBlockForPlan } : {}),
+              }),
+              ...stageOpts('plan'),
+            },
           );
           angles = planned.angles.length > 0 ? planned.angles.slice(0, maxAngles) : [topic];
           await appendEpisodic(
@@ -483,14 +506,17 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
 
         // --- Stage 2: parallel research ---
         stage = 'research';
-        const settled = await settledPool(angles, angleConcurrency, (angle) =>
+        const settled = await settledPool(angles, effectiveConcurrency, (angle) =>
           deps.registry.invoke<ResearchAngleArgs, ResearchAngleResult>(
             'research-angle',
-            withModel({
-              angle, topic, since, until,
-              ...(prioritySources !== undefined ? { prioritySources } : {}),
-              ...(communityDigest.length > 0 ? { communityDigest } : {}),
-            }),
+            {
+              ...withModel({
+                angle, topic, since, until,
+                ...(prioritySources !== undefined ? { prioritySources } : {}),
+                ...(communityDigest.length > 0 ? { communityDigest } : {}),
+              }),
+              ...stageOpts('research'),
+            },
           ),
         );
         const rawFindings: Finding[] = [];
@@ -534,30 +560,39 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         // --- Stage 3: challenge / verify ---
         stage = 'challenge';
         let adjudicated: readonly Finding[] = rawFindings;
-        try {
-          const challenged = await deps.registry.invoke<
-            ChallengeFindingsArgs,
-            ChallengeFindingsResult
-          >('challenge-findings', withModel({ findings: rawFindings, topic, since, until }));
-          adjudicated = challenged.findings;
-          await appendEpisodic(
-            'challenge-findings',
-            JSON.stringify({ findingCount: adjudicated.length }),
-            challenged.costGbp,
-          );
-          accrue('challenge-findings', challenged.costGbp);
-        } catch (e) {
-          // degrade — synthesise un-adjudicated findings.
-          console.warn(
-            `[run-brief] challenge-findings failed, using un-adjudicated findings: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          );
-          adjudicated = rawFindings;
-          await appendEpisodic(
-            'challenge-findings',
-            JSON.stringify({ degraded: true, findingCount: adjudicated.length }),
-          );
+        let challengeDegraded = false;
+        const verifierOff = subagents.get('verifier')?.enabled === false;
+        if (verifierOff) {
+          console.warn('[run-brief] verifier disabled via config.subagents; using un-adjudicated findings');
+          challengeDegraded = true;
+          await appendEpisodic('challenge-findings', JSON.stringify({ disabled: true, findingCount: adjudicated.length }));
+        } else {
+          try {
+            const challenged = await deps.registry.invoke<
+              ChallengeFindingsArgs,
+              ChallengeFindingsResult
+            >('challenge-findings', { ...withModel({ findings: rawFindings, topic, since, until }), ...stageOpts('verifier') });
+            adjudicated = challenged.findings;
+            await appendEpisodic(
+              'challenge-findings',
+              JSON.stringify({ findingCount: adjudicated.length }),
+              challenged.costGbp,
+            );
+            accrue('challenge-findings', challenged.costGbp);
+          } catch (e) {
+            // degrade — synthesise un-adjudicated findings.
+            console.warn(
+              `[run-brief] challenge-findings failed, using un-adjudicated findings: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+            adjudicated = rawFindings;
+            challengeDegraded = true;
+            await appendEpisodic(
+              'challenge-findings',
+              JSON.stringify({ degraded: true, findingCount: adjudicated.length }),
+            );
+          }
         }
         const verdicts = { confirmed: 0, disputed: 0, unverified: 0 };
         for (const f of adjudicated) {
@@ -567,7 +602,12 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         }
         await deps.audit.emit({
           eventType: 'findings.challenged',
-          payload: { runId, findingCount: adjudicated.length, ...verdicts },
+          payload: {
+            runId,
+            findingCount: adjudicated.length,
+            ...verdicts,
+            ...(challengeDegraded ? { degraded: true } : {}),
+          },
         });
 
         // --- Stage 4: synthesize ---
@@ -579,14 +619,17 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const recallBlockForSynthesize = await buildRecallBlock(`synthesize Genesys brief for ${topic}`, args.skipRecall === true);
         const composed = await deps.registry.invoke<SynthesizeBriefArgs, SynthesizeBriefResult>(
           'synthesize-brief',
-          withModel({
-            findings: adjudicated, briefDescription: topic, since, until,
-            ...(persona !== undefined ? { persona } : {}),
-            ...(guardrails !== undefined ? { guardrails } : {}),
-            ...(markdownSections !== undefined ? { markdownSections } : {}),
-            ...(extra !== undefined ? { extraInstructions: extra } : {}),
-            ...(recallBlockForSynthesize ? { systemPromptPrefix: recallBlockForSynthesize } : {}),
-          }),
+          {
+            ...withModel({
+              findings: adjudicated, briefDescription: topic, since, until,
+              ...(persona !== undefined ? { persona } : {}),
+              ...(guardrails !== undefined ? { guardrails } : {}),
+              ...(markdownSections !== undefined ? { markdownSections } : {}),
+              ...(extra !== undefined ? { extraInstructions: extra } : {}),
+              ...(recallBlockForSynthesize ? { systemPromptPrefix: recallBlockForSynthesize } : {}),
+            }),
+            ...stageOpts('synthesizer'),
+          },
         );
         await deps.audit.emit({
           eventType: 'brief.synthesized',

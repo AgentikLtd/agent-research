@@ -38,7 +38,12 @@ function wireRegistry(opts: {
   challenge?: Skill<ChallengeFindingsArgs, ChallengeFindingsResult>;
   synth?: Skill<SynthesizeBriefArgs, SynthesizeBriefResult>;
   dispatch?: Skill<DispatchBriefArgs, DispatchBriefResult>;
-  captures?: { research?: ResearchAngleArgs[]; synth?: SynthesizeBriefArgs[] };
+  captures?: {
+    research?: ResearchAngleArgs[];
+    synth?: SynthesizeBriefArgs[];
+    plan?: PlanResearchArgs[];
+    challenge?: ChallengeFindingsArgs[];
+  };
 }) {
   const registry = createSkillRegistry();
   registry.register(opts.gather ?? {
@@ -49,7 +54,10 @@ function wireRegistry(opts: {
   });
   registry.register(opts.plan ?? {
     name: 'plan-research',
-    async invoke() { return { angles: ['angle-1', 'angle-2'] }; },
+    async invoke(args: PlanResearchArgs) {
+      opts.captures?.plan?.push(args);
+      return { angles: ['angle-1', 'angle-2'] };
+    },
   });
   registry.register(opts.research ?? {
     name: 'research-angle',
@@ -61,6 +69,7 @@ function wireRegistry(opts: {
   registry.register(opts.challenge ?? {
     name: 'challenge-findings',
     async invoke(args: ChallengeFindingsArgs) {
+      opts.captures?.challenge?.push(args);
       return { findings: args.findings.map((f) => ({ ...f, verdict: 'confirmed' as const })) };
     },
   });
@@ -381,5 +390,88 @@ describe('run-brief skipRecall', () => {
     await skill.invoke({ skipRecall: false });
     expect(captures.synth[0]?.systemPromptPrefix).toContain('Relevant prior learnings');
     expect(planCaptures[0]?.systemPromptPrefix).toContain('Relevant prior learnings');
+  });
+});
+
+describe('run-brief config.subagents wiring (DDR-001)', () => {
+  it('(a) applies a research persona system_prompt + model from config.subagents', async () => {
+    const captures = { research: [] as ResearchAngleArgs[] };
+    const registry = wireRegistry({ captures });
+    const profile: AgentProfile = {
+      ...baseProfile,
+      config: {
+        ...baseProfile.config,
+        subagents: [{ id: 'research', name: 'R', system_prompt: 'CUSTOM', model: 'm2' }],
+      },
+    };
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(profile), audit: recordingAudit().client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    // a per-run model is present too; the per-subagent model must win.
+    await skill.invoke({ model: 'per-run-model' });
+    expect(captures.research[0]?.systemPromptOverride).toBe('CUSTOM');
+    expect(captures.research[0]?.model).toBe('m2');
+  });
+
+  it('(b) empty config.subagents = no systemPromptOverride on any stage', async () => {
+    const captures = {
+      research: [] as ResearchAngleArgs[],
+      synth: [] as SynthesizeBriefArgs[],
+      plan: [] as PlanResearchArgs[],
+      challenge: [] as ChallengeFindingsArgs[],
+    };
+    const registry = wireRegistry({ captures });
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(baseProfile), audit: recordingAudit().client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    await skill.invoke({});
+    expect(captures.plan[0]?.systemPromptOverride).toBeUndefined();
+    expect(captures.research[0]?.systemPromptOverride).toBeUndefined();
+    expect(captures.synth[0]?.systemPromptOverride).toBeUndefined();
+    expect(captures.challenge[0]?.systemPromptOverride).toBeUndefined();
+  });
+
+  it('(c) verifier enabled:false skips challenge-findings and degrades', async () => {
+    const captures = { challenge: [] as ChallengeFindingsArgs[] };
+    const registry = wireRegistry({ captures });
+    const audit = recordingAudit();
+    const profile: AgentProfile = {
+      ...baseProfile,
+      config: {
+        ...baseProfile.config,
+        subagents: [{ id: 'verifier', name: 'V', system_prompt: 'x', enabled: false }],
+      },
+    };
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(profile), audit: audit.client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    const result = await skill.invoke({});
+    expect(captures.challenge).toHaveLength(0); // never invoked
+    const ev = audit.events.find((e) => e.eventType === 'findings.challenged');
+    expect(ev?.payload).toMatchObject({ degraded: true });
+    // raw research findingCount preserved (2 angles × 1 finding)
+    expect(result.findingCount).toBe(2);
+    expect(ev?.payload).toMatchObject({ findingCount: 2 });
+  });
+
+  it('(d) config.delegation.max_concurrent_workers=1 still completes (concurrency smoke)', async () => {
+    // Behavioural smoke: exact concurrency limit is not directly observable
+    // through the mock harness, so we assert the run completes and produces
+    // findings with the delegation config present.
+    const registry = wireRegistry({});
+    const profile: AgentProfile = {
+      ...baseProfile,
+      config: { ...baseProfile.config, delegation: { max_concurrent_workers: 1 } },
+    };
+    const skill = createRunBriefSkill({
+      registry, profile: fakeProfile(profile), audit: recordingAudit().client,
+      clock: () => new Date('2026-05-19T00:00:00.000Z'), newId: () => 'run-1',
+    });
+    const result = await skill.invoke({});
+    expect(result.findingCount).toBe(2);
+    expect(result.angleCount).toBe(2);
   });
 });
