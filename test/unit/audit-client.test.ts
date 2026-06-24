@@ -93,6 +93,31 @@ describe('createAuditClient', () => {
     expect(logged[0]?.line).toContain('[audit:remote-failed]');
   });
 
+  it('drops an unknown beat (not in the open taxonomy) without calling the fetcher', async () => {
+    const logged: { line: string; detail: unknown }[] = [];
+    let fetcherCalled = false;
+    const fetcher: typeof fetch = async () => {
+      fetcherCalled = true;
+      return new Response('{}', { status: 200 });
+    };
+    const client = createAuditClient({
+      hubUrl: 'http://h',
+      token: 't',
+      agentId: 'a1',
+      fetcher,
+      logger: (line, detail) => logged.push({ line, detail }),
+    });
+    await expect(
+      client.emit({
+        eventType: 'totally.unknown.beat',
+        payload: { runId: '11111111-1111-4111-8111-111111111111' },
+      }),
+    ).resolves.toBeUndefined();
+    expect(fetcherCalled).toBe(false);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.line).toContain('[audit] dropping unknown beat');
+  });
+
   it('remote mode swallows a thrown fetcher and logs [audit:remote-threw]', async () => {
     const logged: { line: string; detail: unknown }[] = [];
     const fetcher: typeof fetch = async () => {

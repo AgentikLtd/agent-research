@@ -22,7 +22,15 @@
  * audit is non-critical to the agent's primary path; we never let a
  * non-2xx on the trace route (e.g. a 404 before the route rolls) blow
  * up a successful skill.
+ *
+ * Beat validation: before POSTing, the remote client checks the event type
+ * against the open beat taxonomy (`isAllowedBeat`). An unknown beat (a typo,
+ * or one the route would 400) is dropped best-effort — logged, never thrown,
+ * never fetched. The existing pipeline beats + `run.started`/`run.completed`/
+ * `run.failed` are all in `KNOWN_BEATS`, so they pass unchanged.
  */
+
+import { isAllowedBeat } from '../trace-taxonomy.js';
 
 export interface AuditEvent {
   readonly eventType: string;
@@ -59,6 +67,10 @@ export function createAuditClient(deps: AuditClientDeps): AuditClient {
 
   return {
     async emit(event) {
+      if (!isAllowedBeat(event.eventType)) {
+        log('[audit] dropping unknown beat', event.eventType);
+        return;
+      }
       try {
         const runId = typeof event.payload['runId'] === 'string' ? event.payload['runId'] : '';
         const body = JSON.stringify({
