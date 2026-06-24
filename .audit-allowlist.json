@@ -48,6 +48,62 @@
       "reason": "Transitive via fastembed@2.1.0 (tar@^6.2.0 dep) for ONNX model extraction. No tar@6.x backport exists; overriding to tar@7.x breaks fastembed's ESM default-import at runtime (tar@7 is ESM-only, no default export). Tarball fetched over HTTPS from huggingface.co model registry — no attacker-controlled paths. Unblock when fastembed releases a tar@7-compatible build.",
       "expires": "2026-08-22",
       "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-5375-pq7m-f5r2",
+      "package": "@grpc/grpc-js",
+      "severity": "high",
+      "reason": "Newly-disclosed transitive advisory (not introduced by any code change; main predates the disclosure). grpc-js is pulled in only via the OpenTelemetry OTLP/gRPC trace exporter and is used solely for OUTBOUND span export to the trusted in-tenant OTLP collector — no untrusted party sends gRPC requests to the agent, so the malformed-request server-crash path is unreachable here. Remediate by bumping the OTel SDK to a grpc-js-patched range before expiry.",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-99f4-grh7-6pcq",
+      "package": "@grpc/grpc-js",
+      "severity": "high",
+      "reason": "Newly-disclosed transitive advisory via the OTel OTLP/gRPC exporter (outbound span export to the trusted collector only). A malformed compressed message can crash a client/server, but the agent is the gRPC CLIENT exporting to a trusted collector, not a server receiving untrusted gRPC. Remediate via the OTel SDK grpc-js bump before expiry.",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-f38q-mgvj-vph7",
+      "package": "protobufjs",
+      "severity": "moderate",
+      "reason": "Newly-disclosed transitive advisory via grpc-js/OTel. Schema-derived names can shadow runtime-significant properties; only reached when decoding attacker-controlled protobuf, which the agent never does (protobuf is the trusted OTLP export path). Remediate via the OTel/grpc-js bump before expiry.",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-94rc-8x27-4472",
+      "package": "protobufjs",
+      "severity": "moderate",
+      "reason": "Newly-disclosed transitive advisory via grpc-js/OTel. Memory amplification from preserved unknown fields in binary decode; only the trusted OTLP export path decodes protobuf here. Remediate via the OTel/grpc-js bump before expiry.",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-8988-4f7v-96qf",
+      "package": "@opentelemetry/core",
+      "severity": "moderate",
+      "reason": "Newly-disclosed transitive advisory via the OTel SDK. Unbounded memory allocation in W3C Baggage propagation; baggage is set internally by the agent's own instrumentation, not from attacker-controlled inbound headers across the bearer-auth boundary. Remediate via the OTel SDK bump before expiry.",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-hmw2-7cc7-3qxx",
+      "package": "form-data",
+      "severity": "high",
+      "reason": "Newly-disclosed transitive advisory. CRLF injection in form-data via unescaped multipart field names/filenames — only exploitable when building a multipart body from attacker-controlled field NAMES. The agent never constructs multipart requests with attacker-controlled field names (research-source fetches are JSON/GET; field names are static). Remediate by bumping the form-data-pulling dep before expiry.",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
+    },
+    {
+      "advisoryId": "GHSA-vmf3-w455-68vh",
+      "package": "tar",
+      "severity": "moderate",
+      "reason": "Newly-disclosed tar advisory (PAX size-override parser differential / file smuggling), same dependency path as the existing tar entries above: transitive via fastembed@2.1.0 for ONNX model extraction. Tarballs are fetched over HTTPS from the huggingface.co model registry — no attacker-controlled tar input. Clears when fastembed ships a tar@7-compatible build (see the tar entries expiring 2026-08-22).",
+      "expires": "2026-09-22",
+      "owner": "mrjgbell"
     }
   ]
 }
