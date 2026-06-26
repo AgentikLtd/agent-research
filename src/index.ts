@@ -67,6 +67,7 @@ import { createChallengeFindingsSkill } from './skills/challenge-findings.js';
 import { createSynthesizeBriefSkill } from './skills/synthesize-brief.js';
 import { createDispatchBriefSkill } from './skills/dispatch-brief.js';
 import { createRunBriefSkill } from './skills/run-brief.js';
+import { createKnowledgeClient } from './hub/knowledge-client.js';
 import { createConsolidateMemoriesSkill } from './skills/consolidate-memories.js';
 import { createOpenAiEmbedder } from './memory/embedder.js';
 import { createFastEmbedEmbedder } from './memory/fastembed-embedder.js';
@@ -535,11 +536,20 @@ async function main(): Promise<void> {
 
   // run-brief registered after memory block so episodic + recall deps are available.
   // exactOptionalPropertyTypes: spread only when defined.
+  // Knowledge retrieval is always wired (best-effort client — no env guard needed).
+  // GATE-1: pass env.AGENT_NAME (the slug, e.g. "research-genesys"), NOT env.AGENT_ID (UUID).
+  const knowledgeClient = createKnowledgeClient({
+    hubUrl: env.HUB_BASE_URL,
+    agentName: env.AGENT_NAME,
+    token: env.HUB_AGENT_TOKEN,
+  });
+  console.info(`[boot] knowledge retrieval: hub /api/agents/${env.AGENT_NAME}/knowledge/query`);
   registry.register(
     createRunBriefSkill({
       registry,
       profile,
       audit,
+      queryKnowledge: knowledgeClient,
       ...(episodicWriter !== undefined ? { episodicWriter } : {}),
       ...(memory !== undefined ? { memory } : {}),
       ...(semanticSearcher !== undefined ? { semanticSearcher } : {}),
