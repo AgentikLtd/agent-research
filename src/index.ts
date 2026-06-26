@@ -152,6 +152,10 @@ async function probeHubHealth(hubUrl: string): Promise<boolean> {
 interface JsonRpcInvokeParams {
   readonly skill: string;
   readonly args?: unknown;
+  /** Present only when the caller sends `params.mode==='async'`. NEVER folded into args (GC-2/BF-2). */
+  readonly mode?: string;
+  /** Hub-supplied run correlation id. NEVER folded into args at parse time; injected into args intentionally in the handler (GC-7). */
+  readonly runId?: string;
 }
 
 function parseInvokeParams(raw: unknown): JsonRpcInvokeParams | null {
@@ -159,8 +163,26 @@ function parseInvokeParams(raw: unknown): JsonRpcInvokeParams | null {
   const obj = raw as Record<string, unknown>;
   const skill = obj['skill'];
   if (typeof skill !== 'string' || skill.length === 0) return null;
-  return { skill, args: obj['args'] };
+  // mode and runId are siblings of skill/args — NEVER folded into args (GC-2/BF-2).
+  // exactOptionalPropertyTypes: only include optional properties when they have a value.
+  const hasMode = typeof obj['mode'] === 'string';
+  const hasRunId = typeof obj['runId'] === 'string';
+  return {
+    skill,
+    args: obj['args'],
+    ...(hasMode ? { mode: obj['mode'] as string } : {}),
+    ...(hasRunId ? { runId: obj['runId'] as string } : {}),
+  };
 }
+
+/**
+ * Module-level in-flight skill guard (GC-4/BF-1).
+ * A second async `skills.invoke` for an already-running skill is rejected
+ * with `{accepted:false,reason:'already in flight'}` (HTTP 200, app-level).
+ * The set is cleared on settle (`.finally`) so the next invocation can proceed.
+ * Note: module-level so it persists across calls within the same process.
+ */
+const inFlight = new Set<string>();
 
 interface JsonRpcEnvelope {
   readonly jsonrpc?: unknown;
@@ -330,6 +352,58 @@ export async function handleJsonRpc(
     };
   }
 
+  // Synchronous validation FIRST: unknown skill / invalid params return their
+  // existing JSON-RPC errors BEFORE any detach (safe for both sync and async paths).
+  // For the async path this means a genuine dispatch error is returned, not a false ack.
+  if (invoke.mode === 'async') {
+    // Validate the skill exists synchronously before any detach.
+    if (!deps.registry.list().some((s) => s.name === invoke.skill)) {
+      return {
+        status: 200,
+        body: jsonRpcError(parsed.id, JSONRPC_UNKNOWN_SKILL, `unknown skill: ${invoke.skill}`),
+      };
+    }
+
+    // In-flight guard (GC-4/BF-1): reject a concurrent invocation of the same skill.
+    if (inFlight.has(invoke.skill)) {
+      return {
+        status: 200,
+        body: jsonRpcSuccess(parsed.id, { accepted: false, reason: 'already in flight' }),
+      };
+    }
+
+    // Build argsWithRunId: inject runId so the skill can use it for correlation (GC-7).
+    // mode is intentionally EXCLUDED — it stays at the params level only (GC-2/BF-2).
+    const argsWithRunId: unknown =
+      invoke.runId !== undefined
+        ? (invoke.args !== null && typeof invoke.args === 'object'
+            ? { ...(invoke.args as Record<string, unknown>), runId: invoke.runId }
+            : { runId: invoke.runId })
+        : invoke.args;
+
+    // Mark in-flight, then detach.
+    inFlight.add(invoke.skill);
+    const skillName = invoke.skill; // capture for .catch/.finally closures
+    deps.registry.invoke(invoke.skill, argsWithRunId)
+      .finally(() => { inFlight.delete(skillName); })
+      .catch((e: unknown) => {
+        // GC-8/BF-8: sanitized only — never JSON.stringify(e) (could carry
+        // chunk/prompt content). This layer has no audit client so stdout is correct.
+        const name = e instanceof Error ? e.name : 'Error';
+        const message = (e instanceof Error ? e.message : String(e)).slice(0, 200);
+        console.error('[a2a] detached skill failed', { skill: skillName, name, message });
+      });
+
+    // Acknowledge immediately (the skill runs detached).
+    const ackResult: Record<string, unknown> = { accepted: true };
+    if (invoke.runId !== undefined) ackResult['runId'] = invoke.runId;
+    return { status: 200, body: jsonRpcSuccess(parsed.id, ackResult) };
+  }
+
+  // Synchronous path (GC-1 default — mode absent or not 'async'): existing behaviour,
+  // byte-for-byte unchanged. Node's default requestTimeout (300s) applies to this path;
+  // leave it as-is (async-ack makes the cron path sub-second, so 300s never binds there;
+  // a future long *sync* caller would still hit it — raise requestTimeout if that arises).
   try {
     const result = await deps.registry.invoke(invoke.skill, invoke.args);
     return { status: 200, body: jsonRpcSuccess(parsed.id, result) };
