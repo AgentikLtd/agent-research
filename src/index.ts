@@ -374,17 +374,22 @@ export async function handleJsonRpc(
 
     // Build argsWithRunId: inject runId so the skill can use it for correlation (GC-7).
     // mode is intentionally EXCLUDED — it stays at the params level only (GC-2/BF-2).
+    // I-2: only spread-inject runId when args is a non-null object; for primitive args
+    // pass them through unchanged (a primitive arg means the skill doesn't read named
+    // fields, so wrapping in {runId} would silently drop the primitive — BF-2 parity fix).
     const argsWithRunId: unknown =
-      invoke.runId !== undefined
-        ? (invoke.args !== null && typeof invoke.args === 'object'
-            ? { ...(invoke.args as Record<string, unknown>), runId: invoke.runId }
-            : { runId: invoke.runId })
+      invoke.runId !== undefined && invoke.args !== null && typeof invoke.args === 'object'
+        ? { ...(invoke.args as Record<string, unknown>), runId: invoke.runId }
         : invoke.args;
 
     // Mark in-flight, then detach.
+    // I-1: wrap invoke in Promise.resolve().then(…) so a synchronous throw from
+    // registry.invoke is converted to a rejection — guaranteeing .finally always runs
+    // and the skill name is removed from inFlight even if the call throws synchronously.
     inFlight.add(invoke.skill);
     const skillName = invoke.skill; // capture for .catch/.finally closures
-    deps.registry.invoke(invoke.skill, argsWithRunId)
+    void Promise.resolve()
+      .then(() => deps.registry.invoke(skillName, argsWithRunId))
       .finally(() => { inFlight.delete(skillName); })
       .catch((e: unknown) => {
         // GC-8/BF-8: sanitized only — never JSON.stringify(e) (could carry
