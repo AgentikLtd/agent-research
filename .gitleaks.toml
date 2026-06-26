@@ -1,0 +1,26 @@
+# gitleaks configuration for AgentikLtd/agent-research
+#
+# Why this exists: the security CI job runs the gitleaks CLI directly (rather
+# than gitleaks-action@v2) so it works on the self-hosted runner — but the CLI
+# `detect` scans the FULL git history, where the default ruleset flags
+# high-entropy strings inside captured-HTML/RSS/JSON test fixtures. These
+# fixtures are real third-party pages saved verbatim for the research-source
+# parsers to test against; the "secrets" they trip on are public URL query
+# params (e.g. a Genesys community `CommunityKey=<uuid>` link), not credentials.
+#
+# Convention (single top-level `[allowlist]` — the plural `[[allowlists]]` array
+# form is NOT honoured by the pinned gitleaks 8.24.3, mirroring studio):
+#  PATHS — everything under `test/fixtures/` is captured external test data and
+#  holds no real secret. The reviewer's (and code-review's) job is to keep these
+#  paths free of anything real.
+
+title = "agent-research gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Captured third-party test fixtures (HTML/RSS/JSON) — public content, no real secrets"
+paths = [
+  '''test/fixtures/.*''',
+]
