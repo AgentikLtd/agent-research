@@ -24,6 +24,9 @@
  *   - 2026-06-07 — added SubagentDef (DDR-001); byte-mirror of
  *                  shared-types/manifest. Subagents are runtime plumbing:
  *                  agent-orchestrated, observable, never user-authored.
+ *   - 2026-06-26 — added KnowledgeQueryHitSlice (Stage 2.5b B1); vendored
+ *                  response-slice shape from hub POST /api/agents/[id]/knowledge/query.
+ *                  Parity note: no shared-types bump; hub-local type only.
  */
 
 // ---------------------------------------------------------------------------
@@ -273,6 +276,24 @@ export type LlmCallResult =
       readonly ok: false;
       readonly error: { readonly code?: string; readonly message: string };
     };
+
+// ---------------------------------------------------------------------------
+// knowledge (subset) — hub knowledge-query response slice (Stage 2.5b).
+// Canonical: hub POST /api/agents/[id]/knowledge/query response.
+// VENDORED — keep byte-parity with hub KnowledgeQueryHitSlice; no shared-types
+// bump required (hub-local type).
+// ---------------------------------------------------------------------------
+
+/**
+ * A single hit returned by the hub knowledge-query endpoint.
+ * `content` is already `<knowledge>`-wrapped by the hub — do NOT re-wrap.
+ * `source_title` is RAW (hub does not escape it) — never print raw to output.
+ */
+export interface KnowledgeQueryHitSlice {
+  readonly content: string;
+  readonly source_title: string;
+  readonly score: number;
+}
 
 // ---------------------------------------------------------------------------
 // subagents (subset) — DDR-001 SubagentDef. Canonical:
