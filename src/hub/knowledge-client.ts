@@ -19,6 +19,10 @@
  */
 
 import { z } from 'zod';
+import type { KnowledgeQueryHitSlice } from '../contracts.js';
+
+// Re-export so consumers that imported from this module don't break.
+export type { KnowledgeQueryHitSlice };
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -29,12 +33,6 @@ export interface KnowledgeClientDeps {
   readonly agentName: string; // GATE-1: slug (env.AGENT_NAME), used in the URL path
   readonly token: string; // env.HUB_AGENT_TOKEN — bearer
   readonly fetcher?: typeof fetch; // test seam
-}
-
-export interface KnowledgeQueryHitSlice {
-  readonly content: string; // already <knowledge>-wrapped by the hub
-  readonly source_title: string; // RAW — consumers must not print it without escaping (GATE-18)
-  readonly score: number;
 }
 
 /** Best-effort: never throws. Non-200 / network error / invalid body → { chunks: [] }. */

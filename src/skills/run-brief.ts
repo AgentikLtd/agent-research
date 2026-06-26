@@ -36,6 +36,8 @@ import type { DispatchBriefArgs, DispatchBriefResult } from './dispatch-brief.js
 import type { Embedder, EpisodicWriter, MemoryTool } from '../memory/contracts.js';
 import type { SemanticSearcher } from '../memory/adapters/semantic.js';
 import { recall } from '../memory/recall.js';
+import type { QueryKnowledge } from '../hub/knowledge-client.js';
+import { buildKnowledgeBlock } from '../research/knowledge-context.js';
 import type { Skill, SkillRegistry } from './registry.js';
 import type { SubagentDef } from '../contracts.js';
 
@@ -66,6 +68,12 @@ export interface RunBriefArgs {
    * recall on. Decoupled from episodic writes, which continue regardless.
    */
   readonly skipRecall?: boolean;
+  /**
+   * When true, skip the knowledge retrieval block for this run — a separate axis
+   * from skipRecall. Default (undefined/false) keeps knowledge retrieval on when
+   * deps.queryKnowledge is present.
+   */
+  readonly skipKnowledge?: boolean;
 }
 
 export interface RunBriefResult {
@@ -115,6 +123,12 @@ export interface RunBriefDeps {
   readonly embedder?: Embedder;
   /** Tenant ID threaded into recall() for vector-search scoping. */
   readonly tenantId?: string;
+  /**
+   * Optional knowledge retrieval client — calls the hub's knowledge-query endpoint
+   * to retrieve operator-uploaded vendor docs. When absent, knowledge retrieval is
+   * skipped (best-effort, like the memory deps). Wired in index.ts from env.AGENT_NAME.
+   */
+  readonly queryKnowledge?: QueryKnowledge;
   /** Test seam: defaults to `() => new Date()`. */
   readonly clock?: () => Date;
   /** Test seam: defaults to `crypto.randomUUID`. */
@@ -343,6 +357,24 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
     });
   }
 
+  /**
+   * Build a knowledge block for a given query. Returns '' when queryKnowledge
+   * dep is absent, skipKnowledge is true, or on any error — best-effort context.
+   * The `.catch` is belt-and-braces: the client is already best-effort, but
+   * mirrors buildRecallBlock's pattern (GATE-3).
+   */
+  async function buildKnowledgeContextBlock(query: string, skipKnowledge: boolean): Promise<string> {
+    if (skipKnowledge) return '';
+    if (!deps.queryKnowledge) return '';
+    return buildKnowledgeBlock({ queryKnowledge: deps.queryKnowledge, query, topK: 3 })
+      .catch((err: unknown) => {
+        console.warn(
+          `[run-brief] knowledge retrieval failed (non-critical): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return '';
+      });
+  }
+
   return {
     name: 'run-brief',
     description: 'Orchestrate plan → research → challenge → synthesize → dispatch.',
@@ -461,9 +493,20 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
           return modelOverride !== undefined ? ({ ...a, model: modelOverride } as A) : a;
         }
 
+        // Compute the knowledge block ONCE per brief (docs are topic-scoped, not
+        // stage-scoped). One hub round-trip shared across plan + synthesize.
+        // GATE-11: query includes topic AND the run window so proximity search is bounded.
+        const knowledgeBlock = await buildKnowledgeContextBlock(
+          `${topic} (research window ${since}..${until})`,
+          args.skipKnowledge === true,
+        );
+
         // --- Stage 1: plan ---
         stage = 'plan';
         const recallBlockForPlan = await buildRecallBlock(`plan research angles for ${topic}`, args.skipRecall === true);
+        // GATE-10: two distinct blocks — different headers, different sources, concatenated
+        // into one systemPromptPrefix string. Never merged or deduped.
+        const planPrefix = [recallBlockForPlan, knowledgeBlock].filter(Boolean).join('\n\n');
         let angles: readonly string[];
         try {
           const planned = await deps.registry.invoke<PlanResearchArgs, PlanResearchResult>(
@@ -472,7 +515,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
               ...withModel({
                 topic, since, until, maxAngles,
                 ...(prioritySources !== undefined ? { prioritySources } : {}),
-                ...(recallBlockForPlan ? { systemPromptPrefix: recallBlockForPlan } : {}),
+                ...(planPrefix ? { systemPromptPrefix: planPrefix } : {}),
               }),
               ...stageOpts('plan'),
             },
@@ -617,6 +660,8 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
         const markdownSections = pickMarkdownSections(profile);
         const extra = pickExtraInstructions(profile);
         const recallBlockForSynthesize = await buildRecallBlock(`synthesize Genesys brief for ${topic}`, args.skipRecall === true);
+        // GATE-10: same two-block combine as plan — distinct headers, neither dropped.
+        const synthesizePrefix = [recallBlockForSynthesize, knowledgeBlock].filter(Boolean).join('\n\n');
         const composed = await deps.registry.invoke<SynthesizeBriefArgs, SynthesizeBriefResult>(
           'synthesize-brief',
           {
@@ -626,7 +671,7 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
               ...(guardrails !== undefined ? { guardrails } : {}),
               ...(markdownSections !== undefined ? { markdownSections } : {}),
               ...(extra !== undefined ? { extraInstructions: extra } : {}),
-              ...(recallBlockForSynthesize ? { systemPromptPrefix: recallBlockForSynthesize } : {}),
+              ...(synthesizePrefix ? { systemPromptPrefix: synthesizePrefix } : {}),
             }),
             ...stageOpts('synthesizer'),
           },
