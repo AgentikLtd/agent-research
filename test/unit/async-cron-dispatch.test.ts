@@ -401,3 +401,141 @@ describe('sanitized catch (GC-8/BF-8)', () => {
     await new Promise((res) => setTimeout(res, 10));
   });
 });
+
+// ---------------------------------------------------------------------------
+// 7. I-1: sync-throw guard — registry.invoke throws synchronously
+// ---------------------------------------------------------------------------
+
+describe('I-1: in-flight cleared on synchronous throw', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sync throw from registry.invoke does NOT permanently lock the in-flight set', async () => {
+    // Registry whose invoke throws synchronously (not returning a promise at all).
+    const syncThrowRegistry = createSkillRegistry();
+    syncThrowRegistry.register({
+      name: 'run-brief',
+      invoke(_args: unknown): Promise<unknown> {
+        // Throw synchronously before returning a promise.
+        throw new Error('sync boom');
+      },
+    });
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // First async invoke — should return accepted:true even though the skill throws.
+    const r1 = await handleJsonRpc(
+      { registry: syncThrowRegistry, expectedToken: TEST_TOKEN },
+      auth(),
+      skillsInvoke('run-brief', {}, { mode: 'async', runId: 'sync-r1' }),
+    );
+    const b1 = JSON.parse(r1.body) as { result?: { accepted: boolean }; error?: unknown };
+    // The handler should have acked (skill runs detached; sync throw becomes a rejection)
+    expect(b1.result?.accepted).toBe(true);
+
+    // Wait for the Promise.resolve().then(…).finally(…).catch(…) chain to settle.
+    await new Promise((res) => setTimeout(res, 20));
+
+    // console.error should have fired (sanitized catch)
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    // CRITICAL: the second async invoke of the SAME skill must be accepted.
+    // If inFlight was NOT cleared (I-1 bug), this would return accepted:false.
+    const r2 = await handleJsonRpc(
+      { registry: syncThrowRegistry, expectedToken: TEST_TOKEN },
+      auth(),
+      skillsInvoke('run-brief', {}, { mode: 'async', runId: 'sync-r2' }),
+    );
+    const b2 = JSON.parse(r2.body) as { result?: { accepted: boolean }; error?: unknown };
+    expect(b2.result?.accepted).toBe(true);
+
+    // Clean up: let the second detached chain settle too.
+    await new Promise((res) => setTimeout(res, 20));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. I-2: primitive args pass-through on async path
+// ---------------------------------------------------------------------------
+
+describe('I-2: primitive args fidelity on async path', () => {
+  it('primitive args are NOT wrapped in {runId} — they pass through unchanged', async () => {
+    const capturedArgs: unknown[] = [];
+    const registry = createSkillRegistry();
+    registry.register({
+      name: 'run-brief',
+      async invoke(args: unknown) {
+        capturedArgs.push(args);
+        return { done: true };
+      },
+    });
+
+    // Send a numeric primitive as args (edge case — skills that don't use named fields).
+    await handleJsonRpc(
+      { registry, expectedToken: TEST_TOKEN },
+      auth(),
+      skillsInvoke('run-brief', 42, { mode: 'async', runId: 'prim-r1' }),
+    );
+
+    // Wait for detached promise
+    await new Promise((res) => setTimeout(res, 20));
+
+    expect(capturedArgs).toHaveLength(1);
+    // The primitive 42 must be passed through unchanged, NOT wrapped in {runId:…}
+    expect(capturedArgs[0]).toBe(42);
+  });
+
+  it('object args still get runId injected (unchanged from before)', async () => {
+    const capturedArgs: unknown[] = [];
+    const registry = createSkillRegistry();
+    registry.register({
+      name: 'run-brief',
+      async invoke(args: unknown) {
+        capturedArgs.push(args);
+        return { done: true };
+      },
+    });
+
+    await handleJsonRpc(
+      { registry, expectedToken: TEST_TOKEN },
+      auth(),
+      skillsInvoke('run-brief', { topic: 'ai' }, { mode: 'async', runId: 'obj-r1' }),
+    );
+
+    await new Promise((res) => setTimeout(res, 20));
+
+    expect(capturedArgs).toHaveLength(1);
+    const invokedArgs = capturedArgs[0] as Record<string, unknown>;
+    // runId must be injected into object args
+    expect(invokedArgs['runId']).toBe('obj-r1');
+    // original field must be preserved
+    expect(invokedArgs['topic']).toBe('ai');
+    // args must NOT be a primitive
+    expect(typeof invokedArgs).toBe('object');
+  });
+
+  it('null args with runId: runId not injected (null is not a non-null object)', async () => {
+    const capturedArgs: unknown[] = [];
+    const registry = createSkillRegistry();
+    registry.register({
+      name: 'run-brief',
+      async invoke(args: unknown) {
+        capturedArgs.push(args);
+        return { done: true };
+      },
+    });
+
+    await handleJsonRpc(
+      { registry, expectedToken: TEST_TOKEN },
+      auth(),
+      skillsInvoke('run-brief', null, { mode: 'async', runId: 'null-r1' }),
+    );
+
+    await new Promise((res) => setTimeout(res, 20));
+
+    expect(capturedArgs).toHaveLength(1);
+    // null passes through unchanged (same as sync path)
+    expect(capturedArgs[0]).toBeNull();
+  });
+});
