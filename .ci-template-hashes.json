@@ -3,7 +3,7 @@
   "files": [
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "8b8f9ae08813c2d035f09059394a1c7aeddecb3a28968080167d8fb652a8a16b",
+      "sha256": "3cc6ab01aa545ab09d340e33f05e96786c5051e0d80a3d61116da437fa061d4f",
       "securityJobOnly": true,
       "purpose": "gitleaks-action dual-fix security job (permissions + fetch-depth) — cookbook/first-pr-ci-debut"
     }

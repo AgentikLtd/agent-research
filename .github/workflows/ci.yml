@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, agent-research-local]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,7 +48,7 @@ jobs:
     #   - audit-prod.mjs           (gate 6 — pnpm audit --prod clean + allow-list)
     #   - validate-env-drift.mjs   (gate 7 — .env.example ↔ getter parity)
     #   - validate-ci-templates.mjs (gate 8 — CI template byte-parity)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, agent-research-local]
     steps:
       - uses: actions/checkout@v4
 
@@ -74,7 +74,7 @@ jobs:
         run: node scripts/validate-ci-templates.mjs
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, agent-research-local]
     permissions:
       contents: read
       pull-requests: read
@@ -88,6 +88,17 @@ jobs:
             pnpm audit --audit-level=high || true
           fi
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        # Direct CLI invocation rather than gitleaks-action@v2.
+        # Reason: the action's internal SARIF-artifact upload step asserts
+        # `rootDirectory: /root` contains the report path, which breaks on
+        # self-hosted runners where RUNNER_WORKDIR is /tmp/runner/work/...
+        # The CLI gives the same security guarantee (exit code 2 on any
+        # finding) without the artifact-upload path-resolution quirk.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.24.3"
+        run: |
+          if ! command -v gitleaks >/dev/null; then
+            curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+              | tar xz -C /usr/local/bin gitleaks
+          fi
+          gitleaks detect --redact -v --exit-code=2 --log-opts="--no-merges"
