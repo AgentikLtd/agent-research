@@ -74,6 +74,15 @@ export interface RunBriefArgs {
    * deps.queryKnowledge is present.
    */
   readonly skipKnowledge?: boolean;
+  /**
+   * Hub-supplied run correlation id (GC-7/BF-4 — async-cron-dispatch T1).
+   * When present (injected by the async `skills.invoke` handler from `job_runs.id`),
+   * it is used as the run id so all audit events (`run.started/planned/.../completed/failed`)
+   * and the episodic `conversationId` carry the hub-minted UUID for reconciliation.
+   * When absent (direct invoke), the skill mints its own id via `deps.newId` — no
+   * behaviour change for existing callers.
+   */
+  readonly runId?: string;
 }
 
 export interface RunBriefResult {
@@ -379,7 +388,10 @@ export function createRunBriefSkill(deps: RunBriefDeps): Skill<RunBriefArgs, Run
     name: 'run-brief',
     description: 'Orchestrate plan → research → challenge → synthesize → dispatch.',
     async invoke(args) {
-      const runId = newId();
+      // GC-7/BF-4: use hub-supplied runId when present so all audit events carry
+      // the job_runs.id for reconciliation. Fall back to minting a new id when
+      // absent (direct invoke / sync path) — no behaviour change for existing callers.
+      const runId = (typeof args.runId === 'string' && args.runId) ? args.runId : newId();
       const now = clock();
       const until = now.toISOString();
       const since = resolveSince(args.since, now);
