@@ -69,6 +69,7 @@ import { createDispatchBriefSkill } from './skills/dispatch-brief.js';
 import { createRunBriefSkill } from './skills/run-brief.js';
 import { createKnowledgeClient } from './hub/knowledge-client.js';
 import { createConsolidateMemoriesSkill } from './skills/consolidate-memories.js';
+import { createNoopConsolidateMemoriesSkill } from './skills/consolidate-memories-guard.js';
 import { createOpenAiEmbedder } from './memory/embedder.js';
 import { createFastEmbedEmbedder } from './memory/fastembed-embedder.js';
 import { createMemoryRouter } from './memory/memory-router.js';
@@ -611,6 +612,9 @@ async function main(): Promise<void> {
     console.info('[boot] memory router wired (episodic + semantic + shared)');
   } else {
     console.warn('[boot] memory substrate skipped — TENANT_DATABASE_URL / DATABASE_URL not set');
+    // Register the no-op guard so the daily consolidate-memories cron can always resolve
+    // the skill id and exits cleanly instead of throwing UnknownSkillError.
+    registry.register(createNoopConsolidateMemoriesSkill());
   }
 
   // run-brief registered after memory block so episodic + recall deps are available.
@@ -644,7 +648,8 @@ async function main(): Promise<void> {
   // user-created agents that's the agent-runtime image's job).
   const chatDeps: ChatDeps = {
     gateway,
-    model: resolveSkillModel(manifest, 'message-send'),
+    // Chat model comes from x-agentik/model.default (there is no 'message-send' skill entry).
+    model: manifest['x-agentik/model']?.default ?? FALLBACK_MODEL,
     systemPrompt:
       `You are ${env.AGENT_NAME}, a research-specialist agent in the Agentik Studio platform. ` +
       `Your job is to research a topic by gathering and synthesising information from configured sources, ` +
