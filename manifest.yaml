@@ -61,6 +61,11 @@ agent:
       input_modes: [json]
       output_modes: [json]
       visibility: a2a
+    - id: consolidate-memories
+      description: Extract durable facts from episodic transcripts and write them to semantic memory.
+      input_modes: [json]
+      output_modes: [json]
+      visibility: internal
   authentication:
     schemes: [bearer]
 
