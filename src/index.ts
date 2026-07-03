@@ -77,6 +77,8 @@ import { createPostgresEpisodicAdapter } from './memory/adapters/episodic.js';
 import { createPostgresSemanticAdapter, createPostgresSemanticSearcher } from './memory/adapters/semantic.js';
 import { createHttpSharedAdapter } from './memory/adapters/shared.js';
 import { createPostgresEpisodicWriter } from './memory/episodic-writer.js';
+import { makeIdempotencyStore } from './idempotency/store.js';
+import type { IdempotencyStore } from './idempotency/store.js';
 import type { Embedder, EpisodicWriter, MemoryTool } from './memory/contracts.js';
 import type { SemanticSearcher } from './memory/adapters/semantic.js';
 import type { SourceAdapter } from './sources/contracts.js';
@@ -92,6 +94,12 @@ const JSONRPC_METHOD_NOT_FOUND = -32601;
 const JSONRPC_INVALID_PARAMS = -32602;
 const JSONRPC_SKILL_ERROR = -32000;
 const JSONRPC_UNKNOWN_SKILL = -32001;
+/** E2.4b: rare `running`-collision that never resolves within the bounded poll window. */
+const JSONRPC_DUPLICATE_IN_PROGRESS = -32002;
+
+/** E2.4b bounded poll for a rare concurrent `running` collision (see sync path). */
+const IDEMPOTENCY_POLL_INTERVAL_MS = 500;
+const IDEMPOTENCY_POLL_MAX_ATTEMPTS = 20; // 20 * 500ms = ~10s, well under the 300s request timeout.
 
 interface ManifestModelSection {
   readonly default?: string;
@@ -157,6 +165,12 @@ interface JsonRpcInvokeParams {
   readonly mode?: string;
   /** Hub-supplied run correlation id. NEVER folded into args at parse time; injected into args intentionally in the handler (GC-7). */
   readonly runId?: string;
+  /**
+   * Stable dedup key for the SYNC path only (E2.4b), typically
+   * `"${runId}:${nodeId}"` from the hub's capability bridge. NEVER folded
+   * into args — a sibling of skill/args, same treatment as mode/runId.
+   */
+  readonly idempotencyKey?: string;
 }
 
 function parseInvokeParams(raw: unknown): JsonRpcInvokeParams | null {
@@ -164,15 +178,17 @@ function parseInvokeParams(raw: unknown): JsonRpcInvokeParams | null {
   const obj = raw as Record<string, unknown>;
   const skill = obj['skill'];
   if (typeof skill !== 'string' || skill.length === 0) return null;
-  // mode and runId are siblings of skill/args — NEVER folded into args (GC-2/BF-2).
+  // mode, runId, and idempotencyKey are siblings of skill/args — NEVER folded into args (GC-2/BF-2).
   // exactOptionalPropertyTypes: only include optional properties when they have a value.
   const hasMode = typeof obj['mode'] === 'string';
   const hasRunId = typeof obj['runId'] === 'string';
+  const hasIdempotencyKey = typeof obj['idempotencyKey'] === 'string';
   return {
     skill,
     args: obj['args'],
     ...(hasMode ? { mode: obj['mode'] as string } : {}),
     ...(hasRunId ? { runId: obj['runId'] as string } : {}),
+    ...(hasIdempotencyKey ? { idempotencyKey: obj['idempotencyKey'] as string } : {}),
   };
 }
 
@@ -234,6 +250,12 @@ export interface HandleJsonRpcDeps {
   readonly registry: SkillRegistry;
   readonly expectedToken: string;
   readonly chat?: ChatDeps;
+  /**
+   * Durable dedup store for the SYNC `skills.invoke` path (E2.4b). Optional —
+   * absent when no DB is configured, in which case the sync path runs
+   * exactly as before (graceful degradation; dedup is best-effort-on-top).
+   */
+  readonly idempotency?: IdempotencyStore;
 }
 
 export interface JsonRpcHandlerResult {
@@ -407,26 +429,103 @@ export async function handleJsonRpc(
   }
 
   // Synchronous path (GC-1 default — mode absent or not 'async'): existing behaviour,
-  // byte-for-byte unchanged. Node's default requestTimeout (300s) applies to this path;
-  // leave it as-is (async-ack makes the cron path sub-second, so 300s never binds there;
-  // a future long *sync* caller would still hit it — raise requestTimeout if that arises).
-  try {
-    const result = await deps.registry.invoke(invoke.skill, invoke.args);
-    return { status: 200, body: jsonRpcSuccess(parsed.id, result) };
-  } catch (e) {
-    if (e instanceof UnknownSkillError) {
+  // byte-for-byte unchanged EXCEPT for the E2.4b dedup wrap below. Node's default
+  // requestTimeout (300s) applies to this path; leave it as-is (async-ack makes the
+  // cron path sub-second, so 300s never binds there; a future long *sync* caller
+  // would still hit it — raise requestTimeout if that arises).
+  const runSkill = async (): Promise<JsonRpcHandlerResult> => {
+    try {
+      const result = await deps.registry.invoke(invoke.skill, invoke.args);
+      return { status: 200, body: jsonRpcSuccess(parsed.id, result) };
+    } catch (e) {
+      if (e instanceof UnknownSkillError) {
+        return {
+          status: 200,
+          body: jsonRpcError(parsed.id, JSONRPC_UNKNOWN_SKILL, e.message),
+        };
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      const name = e instanceof Error ? e.name : 'Error';
       return {
         status: 200,
-        body: jsonRpcError(parsed.id, JSONRPC_UNKNOWN_SKILL, e.message),
+        body: jsonRpcError(parsed.id, JSONRPC_SKILL_ERROR, message, { kind: name }),
       };
     }
-    const message = e instanceof Error ? e.message : String(e);
-    const name = e instanceof Error ? e.name : 'Error';
-    return {
-      status: 200,
-      body: jsonRpcError(parsed.id, JSONRPC_SKILL_ERROR, message, { kind: name }),
-    };
+  };
+
+  // E2.4b: durable dedup, best-effort-on-top. No store (no DB configured) or no
+  // idempotencyKey → run exactly as before (graceful degradation — never a hard
+  // dependency).
+  if (!deps.idempotency || invoke.idempotencyKey === undefined) {
+    return runSkill();
   }
+
+  const store = deps.idempotency;
+  const key = invoke.idempotencyKey;
+
+  // Runs the skill under an already-held claim: completes (caches) on success,
+  // releases (so a real retry can proceed) on failure. Shared by the initial
+  // claim and by the poll loop's re-claim after an original claimant failed.
+  const runUnderClaim = async (): Promise<JsonRpcHandlerResult> => {
+    try {
+      const outcome = await deps.registry.invoke(invoke.skill, invoke.args);
+      await store.complete(key, outcome);
+      return { status: 200, body: jsonRpcSuccess(parsed.id, outcome) };
+    } catch (e) {
+      // Cache ONLY success — release the claim so a genuine failure does not
+      // leave a stale 'running' row blocking a legitimate retry.
+      await store.release(key);
+      if (e instanceof UnknownSkillError) {
+        return {
+          status: 200,
+          body: jsonRpcError(parsed.id, JSONRPC_UNKNOWN_SKILL, e.message),
+        };
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      const name = e instanceof Error ? e.name : 'Error';
+      return {
+        status: 200,
+        body: jsonRpcError(parsed.id, JSONRPC_SKILL_ERROR, message, { kind: name }),
+      };
+    }
+  };
+
+  const claim = await store.claim(key, invoke.skill);
+  if (claim.kind === 'done') {
+    // Cache hit — return the first call's saved result WITHOUT re-running the skill.
+    return { status: 200, body: jsonRpcSuccess(parsed.id, claim.result) };
+  }
+  if (claim.kind === 'claimed') {
+    return runUnderClaim();
+  }
+
+  // claim.kind === 'running': a rare concurrent duplicate. Bounded poll — NEVER
+  // silently double-run a paid skill. If the row disappears (original released
+  // after failure), re-attempt the claim and run. If it completes, return the
+  // cached result. If still running/unresolved at the deadline, fail closed.
+  for (let attempt = 0; attempt < IDEMPOTENCY_POLL_MAX_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, IDEMPOTENCY_POLL_INTERVAL_MS));
+    const reclaim = await store.claim(key, invoke.skill);
+    if (reclaim.kind === 'done') {
+      return { status: 200, body: jsonRpcSuccess(parsed.id, reclaim.result) };
+    }
+    if (reclaim.kind === 'claimed') {
+      // The original claimant released (failed) or its TTL lapsed — we now
+      // hold the claim ourselves. Run it.
+      return runUnderClaim();
+    }
+    // still 'running' — keep polling.
+  }
+
+  // Deadline exceeded — fail closed rather than risk a double-run of a paid skill.
+  return {
+    status: 200,
+    body: jsonRpcError(
+      parsed.id,
+      JSONRPC_DUPLICATE_IN_PROGRESS,
+      `duplicate invocation still in progress for idempotencyKey=${key} after bounded poll`,
+    ),
+  };
 }
 
 async function main(): Promise<void> {
@@ -544,6 +643,7 @@ async function main(): Promise<void> {
   let memory: MemoryTool | undefined;
   let semanticSearcher: SemanticSearcher | undefined;
   let embedderForRecall: Embedder | undefined;
+  let idempotencyStore: IdempotencyStore | undefined;
 
   if (dbUrl) {
     const tenantPool = new pg.Pool({ connectionString: dbUrl, max: 5 });
@@ -558,6 +658,21 @@ async function main(): Promise<void> {
     console.info(
       `[boot] embedder: ${useOpenAi ? 'openai-compatible (1536d)' : 'fastembed local (384d)'}`,
     );
+
+    // E2.4b: durable idempotency dedup for the sync skills.invoke path.
+    // Reuses the same tenantPool as the memory substrate. Best-effort prune
+    // at boot — a failure here must never block startup.
+    idempotencyStore = makeIdempotencyStore({ pool: tenantPool, tenantId: env.TENANT_ID });
+    idempotencyStore
+      .prune()
+      .then((count) => {
+        if (count > 0) console.info(`[boot] idempotency: pruned ${String(count)} expired row(s)`);
+      })
+      .catch((e: unknown) => {
+        console.warn(
+          `[boot] idempotency prune failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`,
+        );
+      });
 
     const episodicAdapter = createPostgresEpisodicAdapter({
       pool: tenantPool,
@@ -612,6 +727,7 @@ async function main(): Promise<void> {
     console.info('[boot] memory router wired (episodic + semantic + shared)');
   } else {
     console.warn('[boot] memory substrate skipped — TENANT_DATABASE_URL / DATABASE_URL not set');
+    console.warn('[boot] idempotency dedup skipped — TENANT_DATABASE_URL / DATABASE_URL not set (sync skills.invoke runs without dedup)');
     // Register the no-op guard so the daily consolidate-memories cron can always resolve
     // the skill id and exits cleanly instead of throwing UnknownSkillError.
     registry.register(createNoopConsolidateMemoriesSkill());
@@ -662,7 +778,7 @@ async function main(): Promise<void> {
   };
 
   const server = createServer((req, res) => {
-    void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME, chatDeps).catch(
+    void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME, chatDeps, idempotencyStore).catch(
       (e: unknown) => {
         console.error('[http] unexpected error', e);
         if (!res.headersSent) {
@@ -704,6 +820,7 @@ async function handleRequest(
   expectedToken: string,
   agentName: string,
   chat?: ChatDeps,
+  idempotency?: IdempotencyStore,
 ): Promise<void> {
   const url = req.url ?? '/';
   if (req.method === 'GET' && url === '/health') {
@@ -722,7 +839,7 @@ async function handleRequest(
     const body = await readBody(req);
     const authHeader = req.headers['authorization'];
     const result = await handleJsonRpc(
-      { registry, expectedToken, ...(chat ? { chat } : {}) },
+      { registry, expectedToken, ...(chat ? { chat } : {}), ...(idempotency ? { idempotency } : {}) },
       typeof authHeader === 'string' ? authHeader : undefined,
       body,
     );
