@@ -77,8 +77,14 @@ import { createPostgresEpisodicAdapter } from './memory/adapters/episodic.js';
 import { createPostgresSemanticAdapter, createPostgresSemanticSearcher } from './memory/adapters/semantic.js';
 import { createHttpSharedAdapter } from './memory/adapters/shared.js';
 import { createPostgresEpisodicWriter } from './memory/episodic-writer.js';
-import { makeIdempotencyStore } from './idempotency/store.js';
+import { makeIdempotencyStore, ASYNC_HEARTBEAT_MS } from './idempotency/store.js';
 import type { IdempotencyStore } from './idempotency/store.js';
+import {
+  createBridgeCallbackClient,
+  buildCompletedCallback,
+  buildFailedCallback,
+} from './hub/bridge-callback-client.js';
+import type { BridgeCallbackClient } from './hub/bridge-callback-client.js';
 import type { Embedder, EpisodicWriter, MemoryTool } from './memory/contracts.js';
 import type { SemanticSearcher } from './memory/adapters/semantic.js';
 import type { SourceAdapter } from './sources/contracts.js';
@@ -166,11 +172,18 @@ interface JsonRpcInvokeParams {
   /** Hub-supplied run correlation id. NEVER folded into args at parse time; injected into args intentionally in the handler (GC-7). */
   readonly runId?: string;
   /**
-   * Stable dedup key for the SYNC path only (E2.4b), typically
-   * `"${runId}:${nodeId}"` from the hub's capability bridge. NEVER folded
-   * into args — a sibling of skill/args, same treatment as mode/runId.
+   * Stable dedup key from the hub's capability bridge, typically
+   * `"${runId}:${nodeId}"`. Used by the SYNC path (E2.4b) AND the ASYNC path
+   * (AB.7 — the durable async claim authority). NEVER folded into args — a
+   * sibling of skill/args, same treatment as mode/runId.
    */
   readonly idempotencyKey?: string;
+  /**
+   * Hub-minted opaque token (AB.7 / ABF-B12) that resolves the suspended
+   * workflow node. Present only on the async bridge leg. Captured for the
+   * settle-time callback POST; NEVER folded into args.
+   */
+  readonly callbackToken?: string;
 }
 
 function parseInvokeParams(raw: unknown): JsonRpcInvokeParams | null {
@@ -183,12 +196,14 @@ function parseInvokeParams(raw: unknown): JsonRpcInvokeParams | null {
   const hasMode = typeof obj['mode'] === 'string';
   const hasRunId = typeof obj['runId'] === 'string';
   const hasIdempotencyKey = typeof obj['idempotencyKey'] === 'string';
+  const hasCallbackToken = typeof obj['callbackToken'] === 'string';
   return {
     skill,
     args: obj['args'],
     ...(hasMode ? { mode: obj['mode'] as string } : {}),
     ...(hasRunId ? { runId: obj['runId'] as string } : {}),
     ...(hasIdempotencyKey ? { idempotencyKey: obj['idempotencyKey'] as string } : {}),
+    ...(hasCallbackToken ? { callbackToken: obj['callbackToken'] as string } : {}),
   };
 }
 
@@ -251,11 +266,23 @@ export interface HandleJsonRpcDeps {
   readonly expectedToken: string;
   readonly chat?: ChatDeps;
   /**
-   * Durable dedup store for the SYNC `skills.invoke` path (E2.4b). Optional —
-   * absent when no DB is configured, in which case the sync path runs
-   * exactly as before (graceful degradation; dedup is best-effort-on-top).
+   * Durable dedup store for the `skills.invoke` path — SYNC (E2.4b) and ASYNC
+   * (AB.7, via `claimAsync`/`heartbeat`). Optional — absent when no DB is
+   * configured, in which case both paths run exactly as before (graceful
+   * degradation; dedup is best-effort-on-top). NOTE: when the store is absent
+   * the async path falls back to the volatile in-process `inFlight` Set — a
+   * process restart can then double-run a paid brief, which is why the durable
+   * store is wired whenever a DB is present.
    */
   readonly idempotency?: IdempotencyStore;
+  /**
+   * Bridge-callback client (AB.7 / ABF-B12). When present AND the invoke
+   * carries a `callbackToken`, the detached async brief POSTs its settled
+   * result POINTER back to the hub's `/api/engine/bridge-callback` so the
+   * suspended workflow node resumes. Optional — absent for pure email-only
+   * cron runs (no bridge), where the async ack + channel dispatch suffice.
+   */
+  readonly bridgeCallback?: BridgeCallbackClient;
 }
 
 export interface JsonRpcHandlerResult {
@@ -379,7 +406,7 @@ export async function handleJsonRpc(
   // existing JSON-RPC errors BEFORE any detach (safe for both sync and async paths).
   // For the async path this means a genuine dispatch error is returned, not a false ack.
   if (invoke.mode === 'async') {
-    // Validate the skill exists synchronously before any detach.
+    // Validate the skill exists synchronously before any detach/claim.
     if (!deps.registry.list().some((s) => s.name === invoke.skill)) {
       return {
         status: 200,
@@ -387,45 +414,141 @@ export async function handleJsonRpc(
       };
     }
 
-    // In-flight guard (GC-4/BF-1): reject a concurrent invocation of the same skill.
-    if (inFlight.has(invoke.skill)) {
-      return {
-        status: 200,
-        body: jsonRpcSuccess(parsed.id, { accepted: false, reason: 'already in flight' }),
-      };
-    }
-
     // Build argsWithRunId: inject runId so the skill can use it for correlation (GC-7).
-    // mode is intentionally EXCLUDED — it stays at the params level only (GC-2/BF-2).
-    // I-2: only spread-inject runId when args is a non-null object; for primitive args
-    // pass them through unchanged (a primitive arg means the skill doesn't read named
-    // fields, so wrapping in {runId} would silently drop the primitive — BF-2 parity fix).
+    // mode/idempotencyKey/callbackToken are intentionally EXCLUDED — they stay at the
+    // params level only (GC-2/BF-2). I-2: only spread-inject runId when args is a
+    // non-null object; primitive args pass through unchanged (wrapping in {runId}
+    // would silently drop the primitive — BF-2 parity fix).
     const argsWithRunId: unknown =
       invoke.runId !== undefined && invoke.args !== null && typeof invoke.args === 'object'
         ? { ...(invoke.args as Record<string, unknown>), runId: invoke.runId }
         : invoke.args;
 
-    // Mark in-flight, then detach.
-    // I-1: wrap invoke in Promise.resolve().then(…) so a synchronous throw from
-    // registry.invoke is converted to a rejection — guaranteeing .finally always runs
-    // and the skill name is removed from inFlight even if the call throws synchronously.
-    inFlight.add(invoke.skill);
-    const skillName = invoke.skill; // capture for .catch/.finally closures
-    void Promise.resolve()
-      .then(() => deps.registry.invoke(skillName, argsWithRunId))
-      .finally(() => { inFlight.delete(skillName); })
-      .catch((e: unknown) => {
-        // GC-8/BF-8: sanitized only — never JSON.stringify(e) (could carry
-        // chunk/prompt content). This layer has no audit client so stdout is correct.
-        const name = e instanceof Error ? e.name : 'Error';
-        const message = (e instanceof Error ? e.message : String(e)).slice(0, 200);
-        console.error('[a2a] detached skill failed', { skill: skillName, name, message });
-      });
+    const skillName = invoke.skill; // capture for closures
+    const callbackToken = invoke.callbackToken; // capture for the settle-time POST
+    const bridgeCallback = deps.bridgeCallback;
 
-    // Acknowledge immediately (the skill runs detached).
-    const ackResult: Record<string, unknown> = { accepted: true };
-    if (invoke.runId !== undefined) ackResult['runId'] = invoke.runId;
-    return { status: 200, body: jsonRpcSuccess(parsed.id, ackResult) };
+    const ack = (): JsonRpcHandlerResult => {
+      const ackResult: Record<string, unknown> = { accepted: true };
+      if (invoke.runId !== undefined) ackResult['runId'] = invoke.runId;
+      return { status: 200, body: jsonRpcSuccess(parsed.id, ackResult) };
+    };
+
+    // POST the settle-time callback to the hub (AB.7 / ABF-B12). Fire-and-await
+    // is intentionally NOT done — the ack has already been returned; we only
+    // need the POST to eventually land (the client retries internally). NEVER
+    // logs the body/result (ABF-B17 lives in the client).
+    const fireCallback = (body: Parameters<BridgeCallbackClient['send']>[0]): void => {
+      if (callbackToken === undefined || bridgeCallback === undefined) return;
+      void bridgeCallback.send(body).then((outcome) => {
+        if (!outcome.ok) {
+          // Redacted — the client already logged per-attempt; this is the
+          // terminal give-up marker for reconciliation. No token/body here.
+          console.error('[a2a] bridge-callback gave up', { skill: skillName, status: body.status });
+        }
+      });
+    };
+
+    // Detach the brief. On settle: complete() (cache) + completed-callback on
+    // success; release() (free the key) + failed-callback on throw. A hard-kill
+    // between detach and settle relies on the lease + steal-CAS to self-clear.
+    const detach = (onSettle: {
+      readonly complete: (result: unknown) => Promise<void>;
+      readonly release: () => Promise<void>;
+    }): void => {
+      // I-1: Promise.resolve().then(…) converts a synchronous throw into a
+      // rejection so the catch/finally always run.
+      void Promise.resolve()
+        .then(() => deps.registry.invoke(skillName, argsWithRunId))
+        .then(
+          async (result: unknown) => {
+            await onSettle.complete(result);
+            if (callbackToken !== undefined) fireCallback(buildCompletedCallback(callbackToken, result));
+          },
+          async (e: unknown) => {
+            await onSettle.release().catch(() => undefined);
+            // GC-8/BF-8: sanitized only — never JSON.stringify(e) (could carry
+            // chunk/prompt content). This layer has no audit client so stdout is correct.
+            const name = e instanceof Error ? e.name : 'Error';
+            const message = (e instanceof Error ? e.message : String(e)).slice(0, 200);
+            console.error('[a2a] detached skill failed', { skill: skillName, name, message });
+            if (callbackToken !== undefined) fireCallback(buildFailedCallback(callbackToken));
+          },
+        );
+    };
+
+    // --- Durable async dedup authority (AB.7) -------------------------------
+    // When a store + idempotencyKey are present, the durable claim (keyed by
+    // the hub-supplied idempotencyKey, NOT the skill name) is the dedup
+    // authority: it survives a process restart, and different bridge nodes
+    // firing the same skill no longer collide. A duplicate SAME-key fire is an
+    // idempotent no-op ack (accepted:true) — NOT accepted:false (that trips the
+    // hub error mapping).
+    if (deps.idempotency !== undefined && invoke.idempotencyKey !== undefined) {
+      const store = deps.idempotency;
+      const key = invoke.idempotencyKey;
+      const claim = await store.claimAsync(key, skillName);
+
+      if (claim.kind === 'done') {
+        // Prior run already completed. Re-fire the callback from the cached
+        // result (the hub 200-ack is idempotent) so a callback lost on the
+        // first run's settle still lands. Then ack idempotently.
+        if (callbackToken !== undefined) {
+          fireCallback(buildCompletedCallback(callbackToken, claim.result));
+        }
+        return ack();
+      }
+      if (claim.kind === 'running') {
+        // A live in-flight brief already holds this key — idempotent no-op.
+        // Do NOT re-detach or re-run the paid brief.
+        return ack();
+      }
+
+      // claim.kind === 'claimed' — we own the lease. Start the heartbeat, then
+      // detach. The heartbeat extends the lease every ASYNC_HEARTBEAT_MS while
+      // the brief runs; it is cleared on settle. A false heartbeat (row
+      // completed/released/stolen) stops the timer defensively.
+      let beat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+        void store.heartbeat(key).then((alive) => {
+          if (!alive && beat !== undefined) {
+            clearInterval(beat);
+            beat = undefined;
+          }
+        }).catch(() => undefined);
+      }, ASYNC_HEARTBEAT_MS);
+      if (typeof beat.unref === 'function') beat.unref(); // never keep the process alive
+      const stopBeat = (): void => {
+        if (beat !== undefined) {
+          clearInterval(beat);
+          beat = undefined;
+        }
+      };
+
+      detach({
+        complete: async (result) => { stopBeat(); await store.complete(key, result); },
+        release: async () => { stopBeat(); await store.release(key); },
+      });
+      return ack();
+    }
+
+    // --- Degraded path (no store OR no idempotencyKey) ----------------------
+    // Falls back to the volatile in-process skill-name Set (GC-4/BF-1). A
+    // process restart can double-run here — acceptable ONLY when no DB is
+    // configured; the durable path above is preferred whenever a DB exists.
+    if (inFlight.has(skillName)) {
+      // A genuine same-process, same-skill concurrent collision. Kept as
+      // accepted:false for back-compat (there is no durable key to dedup on).
+      return {
+        status: 200,
+        body: jsonRpcSuccess(parsed.id, { accepted: false, reason: 'already in flight' }),
+      };
+    }
+    inFlight.add(skillName);
+    detach({
+      complete: async () => { inFlight.delete(skillName); },
+      release: async () => { inFlight.delete(skillName); },
+    });
+    return ack();
   }
 
   // Synchronous path (GC-1 default — mode absent or not 'async'): existing behaviour,
@@ -575,6 +698,16 @@ async function main(): Promise<void> {
   const channel = createChannelDispatchClient({
     hubUrl: env.HUB_BASE_URL,
     token: env.HUB_AGENT_TOKEN,
+  });
+  // Bridge-callback client (AB.7) — POSTs a settled async brief's result
+  // POINTER back to the hub's /api/engine/bridge-callback so a suspended
+  // workflow node resumes. Uses the agent's OWN bearer to its OWN hub (no
+  // hub-supplied URL — no SSRF). Only fires when the invoke carries a
+  // callbackToken (the bridge leg); pure cron/email runs never trigger it.
+  const bridgeCallback = createBridgeCallbackClient({
+    hubUrl: env.HUB_BASE_URL,
+    token: env.HUB_AGENT_TOKEN,
+    agentName: env.AGENT_NAME,
   });
 
   // --- source adapters (Phase 3) ---
@@ -778,7 +911,7 @@ async function main(): Promise<void> {
   };
 
   const server = createServer((req, res) => {
-    void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME, chatDeps, idempotencyStore).catch(
+    void handleRequest(req, res, registry, env.HUB_AGENT_TOKEN, env.AGENT_NAME, chatDeps, idempotencyStore, bridgeCallback).catch(
       (e: unknown) => {
         console.error('[http] unexpected error', e);
         if (!res.headersSent) {
@@ -821,6 +954,7 @@ async function handleRequest(
   agentName: string,
   chat?: ChatDeps,
   idempotency?: IdempotencyStore,
+  bridgeCallback?: BridgeCallbackClient,
 ): Promise<void> {
   const url = req.url ?? '/';
   if (req.method === 'GET' && url === '/health') {
@@ -839,7 +973,13 @@ async function handleRequest(
     const body = await readBody(req);
     const authHeader = req.headers['authorization'];
     const result = await handleJsonRpc(
-      { registry, expectedToken, ...(chat ? { chat } : {}), ...(idempotency ? { idempotency } : {}) },
+      {
+        registry,
+        expectedToken,
+        ...(chat ? { chat } : {}),
+        ...(idempotency ? { idempotency } : {}),
+        ...(bridgeCallback ? { bridgeCallback } : {}),
+      },
       typeof authHeader === 'string' ? authHeader : undefined,
       body,
     );
