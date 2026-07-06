@@ -27,6 +27,14 @@
  *   - 2026-06-26 — added KnowledgeQueryHitSlice (Stage 2.5b B1); vendored
  *                  response-slice shape from hub POST /api/agents/[id]/knowledge/query.
  *                  Parity note: no shared-types bump; hub-local type only.
+ *   - 2026-07-06 — added BridgeResultPointer + BridgeCallbackBody (AB.7 async
+ *                  bridge callback); byte-mirror of
+ *                  shared-types/src/engine/bridge.ts on branch
+ *                  feat/async-bridge-contract. cross-repo-reviewer gates
+ *                  byte-parity across hub + shared-types + genesys. Genesys
+ *                  CONSTRUCTS the callback body (does not validate it), so a TS
+ *                  type is sufficient — the .strict() zod schemas + the
+ *                  MutuallyAssignable drift-guard stay hub-side.
  */
 
 // ---------------------------------------------------------------------------
@@ -310,4 +318,39 @@ export interface SubagentDef {
   readonly tool_overrides?: readonly string[];
   readonly enabled?: boolean;
   readonly fan_out?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// async bridge callback (AB.7) — the wire contract genesys POSTs back to the
+// hub's `/api/engine/bridge-callback` when a detached async brief settles.
+// Canonical: @agentik/shared-types/src/engine/bridge.ts (branch
+// feat/async-bridge-contract). VENDORED — keep byte-parity; sync on upgrade.
+//
+// PII NOTE: `BridgeResultPointer` is a deliberately NARROW allow-list — it does
+// NOT carry `recipients` (email PII) or `markdown` (raw brief body) from
+// `RunBriefResult`. Genesys MUST project a fresh pointer object field-by-field,
+// NEVER spread `RunBriefResult` into it (that would leak recipients/markdown).
+// ---------------------------------------------------------------------------
+
+/**
+ * Result metadata pointer from a completed or failed brief execution.
+ * `storageUri` is present only when the brief archived to R2 (optional-tolerant).
+ */
+export interface BridgeResultPointer {
+  readonly storageUri?: string | undefined;
+  readonly emailMessageId: string;
+  readonly citationCount: number;
+  readonly costGbp: number;
+}
+
+/**
+ * Envelope payload for a bridge callback from an agent back to the hub.
+ * Signals completion or failure of a long-running research task and carries
+ * the result metadata pointer. `callbackToken` is the hub-minted opaque token
+ * that resolves the suspended workflow node.
+ */
+export interface BridgeCallbackBody {
+  readonly callbackToken: string;
+  readonly status: 'completed' | 'failed';
+  readonly result: BridgeResultPointer;
 }

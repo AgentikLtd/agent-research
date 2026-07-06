@@ -8,7 +8,8 @@
  * end-to-end, mirroring test/integration/memory-e2e-smoke.test.ts's pattern.
  *
  * Schema expected: agent_research_idempotency.completed_results
- * (see migrations/0005_idempotency.sql).
+ * (see migrations/0005_idempotency.sql) PLUS the lease_expires_at column from
+ * migrations/0006_idempotency_heartbeat.sql (AB.7 async claim + heartbeat).
  */
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
@@ -95,5 +96,76 @@ describe.skipIf(skip)('idempotency store e2e', () => {
     // After pruning, claiming the same key must start fresh (not 'done').
     const claimAfterPrune = await store.claim(key, 'run-brief');
     expect(claimAfterPrune.kind).toBe('claimed');
+  });
+
+  // --- ASYNC claim + heartbeat + steal-CAS (AB.7) --------------------------
+
+  it('claimAsync: fresh key claims; a live-lease same-key returns running', async () => {
+    const key = 'asyncA:nodeA';
+    const c1 = await store.claimAsync(key, 'run-brief');
+    expect(c1.kind).toBe('claimed');
+    const c2 = await store.claimAsync(key, 'run-brief');
+    expect(c2.kind).toBe('running'); // lease is live — not stealable
+  });
+
+  it('claimAsync: two DIFFERENT keys both claim (no false collision)', async () => {
+    const a = await store.claimAsync('asyncB1:n', 'run-brief');
+    const b = await store.claimAsync('asyncB2:n', 'run-brief');
+    expect(a.kind).toBe('claimed');
+    expect(b.kind).toBe('claimed');
+  });
+
+  it('steal-CAS: an EXPIRED running lease is reclaimable; a live one is not', async () => {
+    const key = 'asyncC:nodeC';
+    const first = await store.claimAsync(key, 'run-brief');
+    expect(first.kind).toBe('claimed');
+
+    // Live lease → not stealable.
+    expect((await store.claimAsync(key, 'run-brief')).kind).toBe('running');
+
+    // Simulate a hard kill: force the lease into the past (no complete/release).
+    await pool.query(
+      "UPDATE agent_research_idempotency.completed_results SET lease_expires_at = now() - INTERVAL '1 minute' WHERE tenant_id = $1 AND idempotency_key = $2",
+      [tenantId, key],
+    );
+
+    // Now the expired running claim is stealable.
+    const stolen = await store.claimAsync(key, 'run-brief');
+    expect(stolen.kind).toBe('claimed');
+  });
+
+  it('heartbeat extends the lease; a heartbeated claim is not stealable after the original window', async () => {
+    const key = 'asyncD:nodeD';
+    await store.claimAsync(key, 'run-brief');
+
+    // Push the lease close to expiry, then heartbeat to extend it.
+    await pool.query(
+      "UPDATE agent_research_idempotency.completed_results SET lease_expires_at = now() + INTERVAL '1 second' WHERE tenant_id = $1 AND idempotency_key = $2",
+      [tenantId, key],
+    );
+    const beat = await store.heartbeat(key);
+    expect(beat).toBe(true);
+
+    // The heartbeat reset lease_expires_at to now()+20min → still not stealable.
+    const reclaim = await store.claimAsync(key, 'run-brief');
+    expect(reclaim.kind).toBe('running');
+  });
+
+  it('heartbeat returns false for a completed row', async () => {
+    const key = 'asyncE:nodeE';
+    await store.claimAsync(key, 'run-brief');
+    await store.complete(key, { emailMessageId: 'm' });
+    expect(await store.heartbeat(key)).toBe(false);
+  });
+
+  it('claimAsync returns the cached done result after complete()', async () => {
+    const key = 'asyncF:nodeF';
+    await store.claimAsync(key, 'run-brief');
+    await store.complete(key, { emailMessageId: 'm', citationCount: 5 });
+    const done = await store.claimAsync(key, 'run-brief');
+    expect(done.kind).toBe('done');
+    if (done.kind === 'done') {
+      expect(done.result).toMatchObject({ emailMessageId: 'm', citationCount: 5 });
+    }
   });
 });
